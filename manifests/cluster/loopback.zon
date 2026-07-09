@@ -1,0 +1,9 @@
+// Single-machine loopback manifest for smoke-testing the daemon and benchmark
+// plumbing. Loopback numbers are NOT mesh numbers (assumption A-11).
+.{
+    .cluster_name = "ds5-loopback",
+    .manifest_version = 1,
+    .nodes = .{
+        .{ .name = "loop", .role = .dev, .host = "127.0.0.1", .port = 4750, .chip = "dev", .memory_gb = 0.0, .static_cap_gb = 0.0 },
+    },
+}

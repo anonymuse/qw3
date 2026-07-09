@@ -1,0 +1,12 @@
+// DS5 lab cluster. Hosts are the statically-assigned Thunderbolt-bridge IPs —
+// EDIT THESE to match your bridge configuration before the first mesh run
+// (see docs/runbook.md for assigning them).
+.{
+    .cluster_name = "ds5-lab",
+    .manifest_version = 1,
+    .nodes = .{
+        .{ .name = "a", .role = .control_plane, .host = "10.5.0.1", .port = 4750, .chip = "M5 Pro", .memory_gb = 48.0, .static_cap_gb = 33.6 },
+        .{ .name = "b", .role = .decode_worker, .host = "10.5.0.2", .port = 4750, .chip = "M5 Max", .memory_gb = 48.0, .static_cap_gb = 33.6 },
+        .{ .name = "c", .role = .decode_worker, .host = "10.5.0.3", .port = 4750, .chip = "M5 Max", .memory_gb = 48.0, .static_cap_gb = 33.6 },
+    },
+}

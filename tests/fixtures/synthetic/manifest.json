@@ -1,0 +1,795 @@
+{
+ "ds5_fixture_version": 1,
+ "model": {
+  "name": "synthetic-tiny-qwen3moe",
+  "config": {
+   "n_layers": 4,
+   "hidden_dim": 256,
+   "n_q_heads": 4,
+   "n_kv_heads": 2,
+   "head_dim": 64,
+   "n_experts": 8,
+   "top_k": 4,
+   "expert_ffn_dim": 128,
+   "vocab_size": 512,
+   "rms_eps": 1e-06,
+   "rope_theta": 1000000.0,
+   "norm_topk_prob": true,
+   "max_ctx": 512
+  },
+  "gguf": "model.gguf"
+ },
+ "generator": {
+  "tool": "make_fixtures.py",
+  "git_commit": "042ba21a2665d82bc1cfc7eadc0f434a0cd9ed83",
+  "date": "2026-07-09T08:16:35-0500",
+  "seed": 0,
+  "torch": "2.13.0",
+  "transformers": "5.13.0"
+ },
+ "cases": [
+  {
+   "op": "rmsnorm",
+   "name": "l0_attn_norm",
+   "params": {
+    "eps": 1e-06,
+    "n_rows": 17,
+    "dim": 256
+   },
+   "tensors": {
+    "input": "l0_attn_norm.input.ds5t",
+    "weight": "l0_attn_norm.weight.ds5t",
+    "output": "l0_attn_norm.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 1e-05,
+    "rtol": 0.0001
+   }
+  },
+  {
+   "op": "rmsnorm",
+   "name": "l0_q_norm",
+   "params": {
+    "eps": 1e-06,
+    "n_rows": 68,
+    "dim": 64
+   },
+   "tensors": {
+    "input": "l0_q_norm.input.ds5t",
+    "weight": "l0_q_norm.weight.ds5t",
+    "output": "l0_q_norm.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 1e-05,
+    "rtol": 0.0001
+   }
+  },
+  {
+   "op": "matmul_quant",
+   "name": "l0_attn_q",
+   "params": {
+    "m": 17,
+    "n": 256,
+    "k": 256,
+    "w_dtype": "q8_0"
+   },
+   "tensors": {
+    "input": "l0_attn_q.input.ds5t",
+    "weight": "l0_attn_q.weight.ds5t",
+    "output": "l0_attn_q.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.0005,
+    "rtol": 0.002
+   }
+  },
+  {
+   "op": "rope",
+   "name": "l0_rope_q",
+   "params": {
+    "theta": 1000000.0,
+    "n_tokens": 17,
+    "n_heads": 4,
+    "head_dim": 64,
+    "freq_scale": 1.0
+   },
+   "tensors": {
+    "input": "l0_rope_q.input.ds5t",
+    "positions": "l0_rope_q.positions.ds5t",
+    "output": "l0_rope_q.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 1e-05,
+    "rtol": 0.0001
+   }
+  },
+  {
+   "op": "attention",
+   "name": "l0_attn_prefill",
+   "params": {
+    "n_q_heads": 4,
+    "n_kv_heads": 2,
+    "head_dim": 64,
+    "scale": 0.125,
+    "pos": 0,
+    "n_tokens": 17,
+    "max_ctx": 17
+   },
+   "tensors": {
+    "q": "l0_attn_prefill.q.ds5t",
+    "k_cache": "l0_attn_prefill.k_cache.ds5t",
+    "v_cache": "l0_attn_prefill.v_cache.ds5t",
+    "output": "l0_attn_prefill.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.0001,
+    "rtol": 0.001
+   }
+  },
+  {
+   "op": "attention",
+   "name": "l0_attn_decode",
+   "params": {
+    "n_q_heads": 4,
+    "n_kv_heads": 2,
+    "head_dim": 64,
+    "scale": 0.125,
+    "pos": 16,
+    "n_tokens": 1,
+    "max_ctx": 17
+   },
+   "tensors": {
+    "q": "l0_attn_decode.q.ds5t",
+    "k_cache": "l0_attn_decode.k_cache.ds5t",
+    "v_cache": "l0_attn_decode.v_cache.ds5t",
+    "output": "l0_attn_decode.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.0001,
+    "rtol": 0.001
+   }
+  },
+  {
+   "op": "router",
+   "name": "l0_router",
+   "params": {
+    "n_experts": 8,
+    "top_k": 4,
+    "norm_topk_prob": true,
+    "dim": 256,
+    "n_tokens": 17,
+    "w_dtype": "f32"
+   },
+   "tensors": {
+    "input": "l0_router.input.ds5t",
+    "weight": "l0_router.weight.ds5t",
+    "expert_ids": "l0_router.expert_ids.ds5t",
+    "gate_weights": "l0_router.gate_weights.ds5t"
+   },
+   "tolerance": {
+    "atol": 1e-05,
+    "rtol": 0.0
+   }
+  },
+  {
+   "op": "expert_mlp",
+   "name": "l0_experts",
+   "params": {
+    "ffn_dim": 128,
+    "dim": 256,
+    "n_experts": 8,
+    "top_k": 4,
+    "n_tokens": 17,
+    "w_dtype": "q8_0"
+   },
+   "tensors": {
+    "input": "l0_experts.input.ds5t",
+    "gate": "l0_experts.gate.ds5t",
+    "up": "l0_experts.up.ds5t",
+    "down": "l0_experts.down.ds5t",
+    "expert_ids": "l0_experts.expert_ids.ds5t",
+    "gate_weights": "l0_experts.gate_weights.ds5t",
+    "output": "l0_experts.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.001,
+    "rtol": 0.005
+   }
+  },
+  {
+   "op": "layer",
+   "name": "l0_block",
+   "params": {
+    "layer": 0,
+    "pos": 0,
+    "n_tokens": 17
+   },
+   "tensors": {
+    "input": "l0_block.input.ds5t",
+    "positions": "l0_block.positions.ds5t",
+    "output": "l0_block.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.002,
+    "rtol": 0.01
+   }
+  },
+  {
+   "op": "rmsnorm",
+   "name": "l2_attn_norm",
+   "params": {
+    "eps": 1e-06,
+    "n_rows": 17,
+    "dim": 256
+   },
+   "tensors": {
+    "input": "l2_attn_norm.input.ds5t",
+    "weight": "l2_attn_norm.weight.ds5t",
+    "output": "l2_attn_norm.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 1e-05,
+    "rtol": 0.0001
+   }
+  },
+  {
+   "op": "rmsnorm",
+   "name": "l2_q_norm",
+   "params": {
+    "eps": 1e-06,
+    "n_rows": 68,
+    "dim": 64
+   },
+   "tensors": {
+    "input": "l2_q_norm.input.ds5t",
+    "weight": "l2_q_norm.weight.ds5t",
+    "output": "l2_q_norm.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 1e-05,
+    "rtol": 0.0001
+   }
+  },
+  {
+   "op": "matmul_quant",
+   "name": "l2_attn_q",
+   "params": {
+    "m": 17,
+    "n": 256,
+    "k": 256,
+    "w_dtype": "q8_0"
+   },
+   "tensors": {
+    "input": "l2_attn_q.input.ds5t",
+    "weight": "l2_attn_q.weight.ds5t",
+    "output": "l2_attn_q.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.0005,
+    "rtol": 0.002
+   }
+  },
+  {
+   "op": "rope",
+   "name": "l2_rope_q",
+   "params": {
+    "theta": 1000000.0,
+    "n_tokens": 17,
+    "n_heads": 4,
+    "head_dim": 64,
+    "freq_scale": 1.0
+   },
+   "tensors": {
+    "input": "l2_rope_q.input.ds5t",
+    "positions": "l2_rope_q.positions.ds5t",
+    "output": "l2_rope_q.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 1e-05,
+    "rtol": 0.0001
+   }
+  },
+  {
+   "op": "attention",
+   "name": "l2_attn_prefill",
+   "params": {
+    "n_q_heads": 4,
+    "n_kv_heads": 2,
+    "head_dim": 64,
+    "scale": 0.125,
+    "pos": 0,
+    "n_tokens": 17,
+    "max_ctx": 17
+   },
+   "tensors": {
+    "q": "l2_attn_prefill.q.ds5t",
+    "k_cache": "l2_attn_prefill.k_cache.ds5t",
+    "v_cache": "l2_attn_prefill.v_cache.ds5t",
+    "output": "l2_attn_prefill.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.0001,
+    "rtol": 0.001
+   }
+  },
+  {
+   "op": "attention",
+   "name": "l2_attn_decode",
+   "params": {
+    "n_q_heads": 4,
+    "n_kv_heads": 2,
+    "head_dim": 64,
+    "scale": 0.125,
+    "pos": 16,
+    "n_tokens": 1,
+    "max_ctx": 17
+   },
+   "tensors": {
+    "q": "l2_attn_decode.q.ds5t",
+    "k_cache": "l2_attn_decode.k_cache.ds5t",
+    "v_cache": "l2_attn_decode.v_cache.ds5t",
+    "output": "l2_attn_decode.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.0001,
+    "rtol": 0.001
+   }
+  },
+  {
+   "op": "router",
+   "name": "l2_router",
+   "params": {
+    "n_experts": 8,
+    "top_k": 4,
+    "norm_topk_prob": true,
+    "dim": 256,
+    "n_tokens": 17,
+    "w_dtype": "f32"
+   },
+   "tensors": {
+    "input": "l2_router.input.ds5t",
+    "weight": "l2_router.weight.ds5t",
+    "expert_ids": "l2_router.expert_ids.ds5t",
+    "gate_weights": "l2_router.gate_weights.ds5t"
+   },
+   "tolerance": {
+    "atol": 1e-05,
+    "rtol": 0.0
+   }
+  },
+  {
+   "op": "expert_mlp",
+   "name": "l2_experts",
+   "params": {
+    "ffn_dim": 128,
+    "dim": 256,
+    "n_experts": 8,
+    "top_k": 4,
+    "n_tokens": 17,
+    "w_dtype": "q8_0"
+   },
+   "tensors": {
+    "input": "l2_experts.input.ds5t",
+    "gate": "l2_experts.gate.ds5t",
+    "up": "l2_experts.up.ds5t",
+    "down": "l2_experts.down.ds5t",
+    "expert_ids": "l2_experts.expert_ids.ds5t",
+    "gate_weights": "l2_experts.gate_weights.ds5t",
+    "output": "l2_experts.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.001,
+    "rtol": 0.005
+   }
+  },
+  {
+   "op": "layer",
+   "name": "l2_block",
+   "params": {
+    "layer": 2,
+    "pos": 0,
+    "n_tokens": 17
+   },
+   "tensors": {
+    "input": "l2_block.input.ds5t",
+    "positions": "l2_block.positions.ds5t",
+    "output": "l2_block.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.002,
+    "rtol": 0.01
+   }
+  },
+  {
+   "op": "rmsnorm",
+   "name": "l3_attn_norm",
+   "params": {
+    "eps": 1e-06,
+    "n_rows": 17,
+    "dim": 256
+   },
+   "tensors": {
+    "input": "l3_attn_norm.input.ds5t",
+    "weight": "l3_attn_norm.weight.ds5t",
+    "output": "l3_attn_norm.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 1e-05,
+    "rtol": 0.0001
+   }
+  },
+  {
+   "op": "rmsnorm",
+   "name": "l3_q_norm",
+   "params": {
+    "eps": 1e-06,
+    "n_rows": 68,
+    "dim": 64
+   },
+   "tensors": {
+    "input": "l3_q_norm.input.ds5t",
+    "weight": "l3_q_norm.weight.ds5t",
+    "output": "l3_q_norm.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 1e-05,
+    "rtol": 0.0001
+   }
+  },
+  {
+   "op": "matmul_quant",
+   "name": "l3_attn_q",
+   "params": {
+    "m": 17,
+    "n": 256,
+    "k": 256,
+    "w_dtype": "q8_0"
+   },
+   "tensors": {
+    "input": "l3_attn_q.input.ds5t",
+    "weight": "l3_attn_q.weight.ds5t",
+    "output": "l3_attn_q.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.0005,
+    "rtol": 0.002
+   }
+  },
+  {
+   "op": "rope",
+   "name": "l3_rope_q",
+   "params": {
+    "theta": 1000000.0,
+    "n_tokens": 17,
+    "n_heads": 4,
+    "head_dim": 64,
+    "freq_scale": 1.0
+   },
+   "tensors": {
+    "input": "l3_rope_q.input.ds5t",
+    "positions": "l3_rope_q.positions.ds5t",
+    "output": "l3_rope_q.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 1e-05,
+    "rtol": 0.0001
+   }
+  },
+  {
+   "op": "attention",
+   "name": "l3_attn_prefill",
+   "params": {
+    "n_q_heads": 4,
+    "n_kv_heads": 2,
+    "head_dim": 64,
+    "scale": 0.125,
+    "pos": 0,
+    "n_tokens": 17,
+    "max_ctx": 17
+   },
+   "tensors": {
+    "q": "l3_attn_prefill.q.ds5t",
+    "k_cache": "l3_attn_prefill.k_cache.ds5t",
+    "v_cache": "l3_attn_prefill.v_cache.ds5t",
+    "output": "l3_attn_prefill.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.0001,
+    "rtol": 0.001
+   }
+  },
+  {
+   "op": "attention",
+   "name": "l3_attn_decode",
+   "params": {
+    "n_q_heads": 4,
+    "n_kv_heads": 2,
+    "head_dim": 64,
+    "scale": 0.125,
+    "pos": 16,
+    "n_tokens": 1,
+    "max_ctx": 17
+   },
+   "tensors": {
+    "q": "l3_attn_decode.q.ds5t",
+    "k_cache": "l3_attn_decode.k_cache.ds5t",
+    "v_cache": "l3_attn_decode.v_cache.ds5t",
+    "output": "l3_attn_decode.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.0001,
+    "rtol": 0.001
+   }
+  },
+  {
+   "op": "router",
+   "name": "l3_router",
+   "params": {
+    "n_experts": 8,
+    "top_k": 4,
+    "norm_topk_prob": true,
+    "dim": 256,
+    "n_tokens": 17,
+    "w_dtype": "f32"
+   },
+   "tensors": {
+    "input": "l3_router.input.ds5t",
+    "weight": "l3_router.weight.ds5t",
+    "expert_ids": "l3_router.expert_ids.ds5t",
+    "gate_weights": "l3_router.gate_weights.ds5t"
+   },
+   "tolerance": {
+    "atol": 1e-05,
+    "rtol": 0.0
+   }
+  },
+  {
+   "op": "expert_mlp",
+   "name": "l3_experts",
+   "params": {
+    "ffn_dim": 128,
+    "dim": 256,
+    "n_experts": 8,
+    "top_k": 4,
+    "n_tokens": 17,
+    "w_dtype": "q8_0"
+   },
+   "tensors": {
+    "input": "l3_experts.input.ds5t",
+    "gate": "l3_experts.gate.ds5t",
+    "up": "l3_experts.up.ds5t",
+    "down": "l3_experts.down.ds5t",
+    "expert_ids": "l3_experts.expert_ids.ds5t",
+    "gate_weights": "l3_experts.gate_weights.ds5t",
+    "output": "l3_experts.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.001,
+    "rtol": 0.005
+   }
+  },
+  {
+   "op": "layer",
+   "name": "l3_block",
+   "params": {
+    "layer": 3,
+    "pos": 0,
+    "n_tokens": 17
+   },
+   "tensors": {
+    "input": "l3_block.input.ds5t",
+    "positions": "l3_block.positions.ds5t",
+    "output": "l3_block.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.002,
+    "rtol": 0.01
+   }
+  },
+  {
+   "op": "matmul_quant",
+   "name": "lm_head",
+   "params": {
+    "m": 17,
+    "n": 512,
+    "k": 256,
+    "w_dtype": "q8_0"
+   },
+   "tensors": {
+    "input": "lm_head.input.ds5t",
+    "weight": "lm_head.weight.ds5t",
+    "output": "lm_head.output.ds5t"
+   },
+   "tolerance": {
+    "atol": 0.0005,
+    "rtol": 0.002
+   }
+  }
+ ],
+ "prompts": [
+  {
+   "name": "p0_random17",
+   "text": null,
+   "token_ids": [
+    435,
+    326,
+    261,
+    138,
+    157,
+    20,
+    38,
+    8,
+    89,
+    416,
+    332,
+    467,
+    257,
+    310,
+    497,
+    373,
+    323
+   ],
+   "greedy_tokens": [
+    509,
+    509,
+    509,
+    509,
+    298,
+    509,
+    509,
+    509
+   ],
+   "logits": "p0_random17.logits.ds5t",
+   "tolerance": {
+    "atol": 0.05,
+    "rtol": 0.05
+   }
+  },
+  {
+   "name": "p1_ascending",
+   "text": null,
+   "token_ids": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+   ],
+   "greedy_tokens": [
+    149,
+    149,
+    264,
+    149,
+    149,
+    149,
+    149,
+    149
+   ],
+   "logits": "p1_ascending.logits.ds5t",
+   "tolerance": {
+    "atol": 0.05,
+    "rtol": 0.05
+   }
+  },
+  {
+   "name": "p2_repeat",
+   "text": null,
+   "token_ids": [
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7,
+    7
+   ],
+   "greedy_tokens": [
+    171,
+    335,
+    171,
+    335,
+    171,
+    335,
+    171,
+    335
+   ],
+   "logits": "p2_repeat.logits.ds5t",
+   "tolerance": {
+    "atol": 0.05,
+    "rtol": 0.05
+   }
+  },
+  {
+   "name": "p3_boundary",
+   "text": null,
+   "token_ids": [
+    0,
+    511,
+    0,
+    511,
+    0,
+    511,
+    0,
+    511
+   ],
+   "greedy_tokens": [
+    466,
+    466,
+    466,
+    347,
+    141,
+    404,
+    208,
+    170
+   ],
+   "logits": "p3_boundary.logits.ds5t",
+   "tolerance": {
+    "atol": 0.05,
+    "rtol": 0.05
+   }
+  },
+  {
+   "name": "p4_random33",
+   "text": null,
+   "token_ids": [
+    278,
+    286,
+    478,
+    142,
+    417,
+    343,
+    1,
+    201,
+    438,
+    283,
+    17,
+    391,
+    373,
+    433,
+    89,
+    45,
+    441,
+    11,
+    277,
+    41,
+    153,
+    246,
+    216,
+    206,
+    14,
+    2,
+    63,
+    4,
+    343,
+    269,
+    331,
+    131,
+    315
+   ],
+   "greedy_tokens": [
+    114,
+    189,
+    298,
+    307,
+    189,
+    298,
+    189,
+    436
+   ],
+   "logits": "p4_random33.logits.ds5t",
+   "tolerance": {
+    "atol": 0.05,
+    "rtol": 0.05
+   }
+  }
+ ]
+}

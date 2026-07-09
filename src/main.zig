@@ -132,4 +132,6 @@ test {
     _ = @import("shared/stats.zig");
     _ = @import("shared/jsonbuf.zig");
     _ = @import("shared/sysinfo.zig");
+    _ = @import("shared/contracts.zig");
+    _ = @import("shared/fixture.zig");
 }

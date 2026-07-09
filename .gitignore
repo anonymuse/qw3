@@ -1,0 +1,6 @@
+.zig-cache/
+zig-out/
+.DS_Store
+models/
+*.gguf
+__pycache__/

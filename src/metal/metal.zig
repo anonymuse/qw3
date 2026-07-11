@@ -530,6 +530,69 @@ test "frozen add semantics (out = x + y) on fixture tensors" {
     try fixture.expectClose(expected, actual, 1e-6, 0);
 }
 
+test "W5 dispatch-contract mechanics: setBytes@0, 2-D grid, barrier, atomic_float" {
+    // Proves the exact machinery PORTING-moe.md §2 requires from this glue:
+    // a params struct bound with setBytes at index 0, a 2-D threadgroup grid
+    // with over-provisioned grid.x, threadgroup memory + barrier, and
+    // device atomic_float accumulation — all under runtime MSL compilation.
+    const alloc = std.testing.allocator;
+    const n: u32 = 1000; // deliberately not a multiple of the 256-wide group
+    const tg: u32 = 256;
+
+    const x = try alloc.alloc(f32, n);
+    defer alloc.free(x);
+    var rng = std.Random.DefaultPrng.init(42);
+    for (x) |*v| v.* = rng.random().float(f32) * 2.0 - 1.0;
+
+    const Params = extern struct { n: u32, active_x: u32 };
+    const params = Params{ .n = n, .active_x = 2 };
+    const grid_y: u32 = 2;
+    // grid.x = 3 > active_x = 2: the extra column must exit uniformly.
+    const n_groups_total = params.active_x * grid_y;
+
+    // CPU oracle: each active group adds the 256-block of x reversed into out.
+    const expected = try alloc.alloc(f32, n);
+    defer alloc.free(expected);
+    @memset(expected, 0);
+    for (0..n_groups_total) |_| {
+        var base: u32 = 0;
+        while (base < n) : (base += tg) {
+            for (0..tg) |t| {
+                const i = base + t;
+                if (i >= n) break;
+                const mirror = base + (tg - 1 - @as(u32, @intCast(t)));
+                expected[i] += if (mirror < n) x[mirror] else 0;
+            }
+        }
+    }
+
+    const ctx = try Ctx.init(alloc);
+    defer ctx.deinit();
+    // Host slice → device buffer via the copy path, exactly how the glue
+    // uploads ExpertMlpArgs.pairs (frozen 12-byte PairDispatch records).
+    const xb = try ctx.bufferFromBytes(std.mem.sliceAsBytes(x));
+    const ob = try ctx.createBuffer(@as(u64, n) * 4); // pre-zeroed accumulator
+
+    ctx.begin();
+    const pso = try ctx.pipeline("proof_atomic_accum");
+    ctx.setPipeline(pso);
+    ctx.setBytes(0, std.mem.asBytes(&params));
+    ctx.setBuf(1, xb);
+    ctx.setBuf(2, ob);
+    ctx.dispatch(
+        .{ .width = params.active_x + 1, .height = grid_y, .depth = 1 },
+        .{ .width = tg, .height = 1, .depth = 1 },
+    );
+    try ctx.submit();
+
+    const actual = try alloc.alloc(f32, n);
+    defer alloc.free(actual);
+    try ctx.download(ob, 0, std.mem.sliceAsBytes(actual));
+    // Every out[i] receives n_groups_total atomic adds of the SAME value, so
+    // the sum is order-independent: exact comparison.
+    try fixture.expectClose(expected, actual, 0, 0);
+}
+
 test "A-09 microbench: per-command-buffer overhead over 100 dispatches" {
     const alloc = std.testing.allocator;
     var t = try loadXY(alloc);

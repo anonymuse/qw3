@@ -4,3 +4,8 @@ zig-out/
 models/
 *.gguf
 __pycache__/
+.venv/
+# Real-model fixtures are generated locally (GBs); only synthetic is committed.
+tests/fixtures/*/
+!tests/fixtures/synthetic/
+!tests/fixtures/synthetic/*.gguf

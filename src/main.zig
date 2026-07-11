@@ -134,4 +134,5 @@ test {
     _ = @import("shared/sysinfo.zig");
     _ = @import("shared/contracts.zig");
     _ = @import("shared/fixture.zig");
+    _ = @import("kernels/cpu/kernels_c.zig");
 }

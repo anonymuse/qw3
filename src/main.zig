@@ -135,6 +135,7 @@ test {
     _ = @import("shared/contracts.zig");
     _ = @import("shared/fixture.zig");
     _ = @import("kernels/cpu/kernels_a.zig");
+    _ = @import("kernels/cpu/kernels_b.zig");
     _ = @import("kernels/cpu/kernels_c.zig");
     _ = @import("gguf/gguf.zig");
 }

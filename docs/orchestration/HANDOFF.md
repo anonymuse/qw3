@@ -50,12 +50,19 @@ in this repo; prompts in `docs/orchestration/prompts/` are self-contained.
 
 | WS | Scope | Branch | Status |
 |---|---|---|---|
-| W1 | GGUF parser | `w1-gguf-parser` | ~90%: parser written, was fixing error-path tests when killed. NOT merged. Finish via prompt T01. |
+| W1 | GGUF parser | `w1-gguf-parser` | DONE, merged (2026-07-12). T01 obsolete. |
 | W2 | Metal glue | `w2-metal-glue` | DONE, merged into integration. |
 | W3 | RMSNorm/RoPE/matmul | `w3-kernels-a` | DONE, merged. |
-| W4 | GQA attention + KV | `w4-kernels-b` (may not exist yet — CPU ref written in the agent transcript, possibly uncommitted) | Finish via T02. |
+| W4 | GQA attention + KV | `w4-kernels-b` | DONE, merged (2026-07-12; 6/6 attn fixtures). T02 obsolete. KV analysis: `docs/notes/w4-kv-layout.md`. |
 | W5 | Router + expert MLP | `w5-kernels-c` | DONE, merged (incl. MSL fix). |
-| W6 | M1 viability (decode-sim, placement sim, f001) | `w6-m1-viability` | Partial: decode-sim WIP uncommitted in worktree `agent-a07b894d896d995d4`; 235B metadata was fetched (235.09B params, 36,945 tensors, 118 shards) but possibly not committed. Finish via T03. |
+| W6 | M1 viability (decode-sim, placement sim, f001) | `w6-m1-viability` | DEFERRED by owner (2026-07-12, "skip benchmarks for now"). Partial WIP in worktree `agent-a07b894d896d995d4`; T03 prompt ready when reactivated. |
+| T04 | M2a CPU forward pass | `t04-cpu-forward` | Started 2026-07-12 (Sonnet executor, attention via temporary stub pending W4 swap-in). |
+
+**Pending orchestrator decision (flagged by W4, decide via ADR-005 amendment
+BEFORE M3/T07 starts):** KV cache dtype is frozen f32 with no dtype field in
+`AttnArgs`/`KvAppendArgs`. At 32K ctx on 235B, decode streams ~12 GiB/token
+of KV at f32; an f16-KV option should be decided while only one attention
+kernel exists. See `docs/notes/w4-kv-layout.md`.
 
 **Hardware inputs owed by the project owner (Jesse)** — every prompt that
 needs them says what to use as a clearly-marked placeholder until they exist:

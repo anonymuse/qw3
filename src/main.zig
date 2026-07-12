@@ -136,4 +136,5 @@ test {
     _ = @import("shared/fixture.zig");
     _ = @import("kernels/cpu/kernels_a.zig");
     _ = @import("kernels/cpu/kernels_c.zig");
+    _ = @import("gguf/gguf.zig");
 }

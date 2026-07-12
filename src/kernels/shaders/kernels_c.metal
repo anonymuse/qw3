@@ -134,7 +134,7 @@ kernel void expert_mlp_swiglu_q8(
     device atomic_float*       out   [[buffer(6)]], // f32 [n_tokens, dim], pre-zeroed
     uint2 tgid    [[threadgroup_position_in_grid]],
     uint  tid     [[thread_index_in_threadgroup]],
-    uint  tg_size [[threads_per_threadgroup]])
+    uint2 tg_size [[threads_per_threadgroup]])
 {
     threadgroup float h[DS5_MAX_FFN];
 
@@ -157,7 +157,7 @@ kernel void expert_mlp_swiglu_q8(
     const device float* xr  = x    + ulong(pr.token) * p.dim;
 
     // Phase 1: h = silu(gate(x)) ⊙ up(x), cooperatively across the group.
-    for (uint j = tid; j < p.ffn_dim; j += tg_size) {
+    for (uint j = tid; j < p.ffn_dim; j += tg_size.x) {
         const float gv = q8_dot_device(g_e + ulong(j) * row_h_bytes, xr, p.dim);
         const float uv = q8_dot_device(u_e + ulong(j) * row_h_bytes, xr, p.dim);
         h[j] = silu_f32(gv) * uv;
@@ -167,7 +167,7 @@ kernel void expert_mlp_swiglu_q8(
     // Phase 2: out[token, i] += weight * dot(h, down_row_i) for this tile.
     const uint tile0    = tgid.y * p.tile_out;
     const uint tile_end = min(tile0 + p.tile_out, p.dim);
-    for (uint i = tile0 + tid; i < tile_end; i += tg_size) {
+    for (uint i = tile0 + tid; i < tile_end; i += tg_size.x) {
         const float acc = q8_dot_tg(d_e + ulong(i) * row_f_bytes, h, p.ffn_dim);
         atomic_fetch_add_explicit(&out[ulong(pr.token) * p.dim + i],
                                   pr.weight * acc,

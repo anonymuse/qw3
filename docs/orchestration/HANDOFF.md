@@ -58,14 +58,12 @@ in this repo; prompts in `docs/orchestration/prompts/` are self-contained.
 | W6 | M1 viability (decode-sim, placement sim, f001) | `w6-m1-viability` | DEFERRED by owner (2026-07-12, "skip benchmarks for now"). Partial WIP in worktree `agent-a07b894d896d995d4`; T03 prompt ready when reactivated. |
 | T04 | M2a CPU forward pass | `t04-cpu-forward` | DONE, merged (2026-07-12). 5/5 fixture prompts, greedy exact, trace hook validated. `ds5 run` CLI works. 74/74 tests green. |
 
-**Pending orchestrator decision (flagged by W4, URGENT — decide via ADR-005 amendment
-BEFORE T05/T07 starts):** KV cache dtype is frozen f32 with no dtype field in
-`AttnArgs`/`KvAppendArgs`. At 32K ctx on 235B, decode streams ~12 GiB/token
-of KV at f32; an f16-KV option should be locked in now while only one attention
-kernel exists (making both CPU and Metal changes in lockstep later is expensive).
-See `docs/notes/w4-kv-layout.md` for the full analysis. **Action: read the note,
-decide f32-or-f16, commit an ADR-005 amendment if changing to f16 (no change to
-contracts.zig needed if staying f32).**
+**DECIDED 2026-07-12:** KV cache dtype frozen to **f16** via ADR-005 amendment (rationale:
+M3 inter-node decode bandwidth at 32K context, placement budget headroom, fixture regen
+when the next orchestrator has numpy installed). Attention loads f16 into f32 registers
+for computation (standard pattern). T05 executor will implement f16 loads in Metal
+shader. Existing f32 fixtures remain until regeneration; tests will adapt as kernels
+update to read f16 (T05 responsibility).
 
 **Hardware inputs owed by the project owner (Jesse)** — every prompt that
 needs them says what to use as a clearly-marked placeholder until they exist:

@@ -2,7 +2,8 @@
 
 **Document type:** Specification (documentation + schema only; no runtime code)
 **Status:** Active
-**Date:** 2026-07-12
+**Date:** 2026-07-12 (§8.2 re-verified against the real downloaded GGUF artifact
+2026-07-13 — see §8.2 for evidence; no other section changed)
 **Adopts:** A5 (two-axis expert quantization), manifest-policy half — per
 `docs/work-packs/2026-07-12-review-incorporation/wp2-quant-manifest-two-axis.md`
 **Sources (binding):** DS5 Project Spec v0.3 §4 (memory caps), §5 (model constants),
@@ -513,17 +514,48 @@ using `--tensor-type`"):
 Verified against the upstream repository on 2026-07-12, not taken from review
 claims (work-pack README rule 5; v0.3 §12).
 
-### 8.2 Granularity constraint (load-bearing)
+### 8.2 Granularity constraint (load-bearing, verified against the real artifact)
 
-In llama.cpp GGUF exports of Qwen3-MoE-family models, **all 128 experts of a layer
-are fused into single 3D tensors per projection**:
-`blk.<L>.ffn_gate_exps.weight`, `blk.<L>.ffn_up_exps.weight`,
-`blk.<L>.ffn_down_exps.weight` (router: `blk.<L>.ffn_gate_inp.weight`). Because
-`--tensor-type` operates on whole named tensors, offline requantization
-granularity is **per (layer, projection), not per expert**. (Verified 2026-07-12
-against upstream naming as used in llama.cpp offload/override discussions;
-re-verify against the real 235B GGUF's tensor listing at M4 — GGUF is the ground
-truth per v0.3 §5.)
+**Confirmed 2026-07-13** by parsing the GGUF header (magic/KV/tensor-info sections;
+no full-weight read needed) of the actual downloaded
+`Qwen3-235B-A22B-Instruct-2507-UD-Q2_K_XL` artifact (`tools/download_models.sh`
+item 2; unsloth dynamic quant, both shards, 1,131 tensors total). This supersedes
+the "verified against upstream naming, re-verify at M4" caveat in the prior draft
+of this section — the re-verification is done, on this exact artifact:
+
+- `general.architecture = qwen3moe`, `qwen3moe.block_count = 94`,
+  `qwen3moe.expert_count = 128`, `qwen3moe.expert_used_count = 8` — matches §2
+  exactly.
+- For **all 94 layers** (`blk.0` … `blk.93`), the three routed-expert projections
+  are single 3D tensors with the expert axis fused into the tensor shape, one
+  `ggml_type` per tensor:
+  - `blk.<L>.ffn_gate_exps.weight` — shape `(4096, 1536, 128)`
+  - `blk.<L>.ffn_up_exps.weight` — shape `(4096, 1536, 128)`
+  - `blk.<L>.ffn_down_exps.weight` — shape `(1536, 4096, 128)`
+  - router: `blk.<L>.ffn_gate_inp.weight` — shape `(4096, 128)`, type `F32`
+    (per-layer, not per-expert, and not fused with the routed projections)
+- A regex search over all 1,131 tensor names for any per-expert pattern
+  (`exps.<idx>.`, `ffn_(gate|up|down).<idx>.`, etc.) matched **zero** tensors.
+  There is no GGUF convention in this artifact — nor in the llama.cpp
+  `qwen3moe` architecture that produced it — that exposes individual experts as
+  separate tensors.
+- Confirms the original finding: because `--tensor-type` (§8.1) matches whole
+  named tensors, offline requantization granularity is **per (layer,
+  projection), not per expert.**
+- Incidental corroboration: this dynamic quant already realizes *different*
+  `ggml_type`s per layer within the same projection (e.g. `ffn_down_exps.weight`
+  is `Q3_K` at layer 0, `Q4_K` at layer 1, `Q3_K` at layer 4 — `ffn_gate_exps`
+  and `ffn_up_exps` are uniformly `Q2_K` throughout in this particular UD build).
+  This is an existing, shipping example of exactly the per-(layer, projection)
+  granularity §8.2 assumes, produced by a different tool (unsloth's calibration
+  pipeline) using the same underlying `--tensor-type`-style mechanism — independent
+  evidence the granularity constraint is real, not a llama.cpp quirk unique to a
+  hand-built manifest.
+
+No newer GGUF convention exposing per-expert tensors was found on the artifact
+actually in use for DS5. (Community repos vary in *which* `ggml_type` they pick
+per layer, not in *whether* the tensor is fused — the fusion is an architecture
+property of the `qwen3moe` GGUF writer in llama.cpp, not a per-quantizer choice.)
 
 Consequences:
 
@@ -541,6 +573,69 @@ Consequences:
    format does not assume either (per-expert `quant_type` records what policy
    wants; cap checks use the types actually realized in the artifact, which after
    aggregation may be ≥ the policy minimum — never below it).
+
+#### 8.2.1 Aggregation algorithm (concrete design)
+
+`expert_stats.json` and the schema stay per-expert regardless of GGUF tensor
+layout (WP-1 field names are unchanged by this section). Only the **manifest
+realization step** — turning a per-expert manifest into the `--tensor-type`
+override list of §8.3 — performs the roll-up, and it is a pure, order-independent
+reduction with one input (the manifest's per-expert `quant_type` records) and one
+output per (layer, projection).
+
+**Fidelity order.** A total order over the ADR-002 sequence, highest first:
+`Q8_0 > Q4_K > Q4_0 > IQ3_S > IQ2_M > IQ2_XS > IQ2_XXS`. (ADR-002 groups `Q4_0`
+and `Q4_K` as one sequencing tier — built together, before I-quants — but does not
+rank one above the other; this document ranks `Q4_K` above `Q4_0` for aggregation
+purposes because K-quant blocks carry finer per-superblock scaling at the same
+nominal bit width, so realizing a layer at `Q4_K` when only `Q4_0` was assigned is
+still an upgrade, never a downgrade, satisfying §4.3 rule 3 either way. This
+ranking is a document-local convention for the aggregation reduction, not an
+ADR-002 amendment.)
+
+**Reduction.** For each layer `L` (0–93):
+
+```
+projection_type(L) = max_fidelity(
+    quant_type(record) for record in all_expert_records(L)   # all 128,
+                                                               # union of nodes B and C
+)
+```
+
+Because a per-expert record's `quant_type` in this schema applies uniformly to
+that expert's gate/up/down weights (§3.3 — one field, not three), the same
+reduced value is used for all three `--tensor-type` overrides of layer `L`
+(`ffn_gate_exps`, `ffn_up_exps`, `ffn_down_exps`); §8.3's example groups layers by
+this single per-layer value rather than computing it three times.
+
+**Interaction with "no stats, no downgrade" (§4.3 rule 3).** The reduction is
+`max`, so it is monotonic in every input: raising any single expert's assigned
+type can only raise or hold `projection_type(L)`, never lower it. Two
+consequences fall directly out of this:
+
+- A `no_stats_default` expert is, by rule 3, assigned the highest-fidelity type
+  that fits the cap (never an I-quant). If that expert's assigned type is the max
+  in its layer, the whole layer realizes at that type — every other expert in the
+  layer receives *at least* what the two-axis policy assigned it, and the
+  `no_stats_default` expert receives *at least* its rule-3 floor. Aggregation
+  cannot push a `no_stats_default` expert below its floor, because aggregation
+  never lowers anything.
+- Conversely, a `measured` expert can end up realized at a *higher* fidelity than
+  its own record specifies, because a layer-mate needed more. This is the
+  intended and only permitted direction of drift (§4.3 preamble: "never downgrade
+  below what the two-axis policy assigned"); the manifest's per-expert
+  `quant_type` field remains the source of truth for *what the policy wanted*,
+  and is not overwritten by the realized value.
+
+**Cap-check consequence (ties to §5.2).** Because realized bytes are `≥` the
+per-expert estimate sum whenever aggregation forces an upgrade,
+`computed_static_total_bytes` in the manifest is a **lower bound**, not the
+number that will actually land on disk/in memory. §7 R2 already requires the
+loader to refuse on the *loader's recomputed* total from GGUF metadata, not the
+manifest's own arithmetic — that rule is what catches aggregation-driven growth;
+no new refusal rule is needed, but the manifest generator should log the
+per-layer aggregated type next to the per-expert requested types so an operator
+can see where and why totals grew before the loader's cap check runs.
 
 ### 8.3 Manifest → override list → command
 
@@ -593,5 +688,5 @@ operator-executed later).
 | §7 R4 no silent substitution | ADR-002; v0.3 G1 |
 | §8 no custom quant pipeline; artifacts via `llama-quantize` | ADR-002; v0.3 §3, §6 |
 | §8.1 override syntax | Upstream ggml-org/llama.cpp `tools/quantize/README.md` and discussion #12741 (verified 2026-07-12) |
-| §8.2 fused expert tensor naming (`blk.<L>.ffn_*_exps.weight`) | Upstream llama.cpp usage (verified 2026-07-12; re-verify against the real GGUF at M4) |
+| §8.2 fused expert tensor naming (`blk.<L>.ffn_*_exps.weight`) | Confirmed against the real downloaded artifact (`Qwen3-235B-A22B-Instruct-2507-UD-Q2_K_XL`, both shards, all 94 layers, verified 2026-07-13); originally sourced from upstream llama.cpp usage (2026-07-12) |
 | Field-name alignment (`layer`, `expert_index`, `model_shape`, header fields, `experts[layer*128+expert_index]`) | `docs/specs/schemas/expert_stats.schema.json` (WP-1, landed 2026-07-12) |

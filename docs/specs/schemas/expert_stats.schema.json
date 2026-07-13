@@ -1,0 +1,234 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Expert Statistics Schema",
+  "description": "Per-expert routing frequency and quantization sensitivity metrics for model placement and quantization decisions",
+  "type": "object",
+  "required": ["header", "experts"],
+  "properties": {
+    "header": {
+      "type": "object",
+      "description": "Metadata about the capture",
+      "required": ["model_id", "model_hash", "corpus_id", "corpus_hash", "capture_date", "git_commit"],
+      "properties": {
+        "model_id": {
+          "type": "string",
+          "description": "Model identifier (e.g., 'Qwen3-235B-A22B-Instruct-2507')"
+        },
+        "model_hash": {
+          "type": "string",
+          "description": "SHA256 hash of the GGUF model file"
+        },
+        "corpus_id": {
+          "type": "string",
+          "description": "Identifier for the calibration corpus"
+        },
+        "corpus_hash": {
+          "type": "string",
+          "description": "SHA256 hash of the calibration corpus file"
+        },
+        "capture_date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of capture"
+        },
+        "git_commit": {
+          "type": "string",
+          "description": "Git commit SHA at time of capture"
+        },
+        "tool_versions": {
+          "type": "object",
+          "description": "Versions of tools used in capture",
+          "properties": {
+            "llama_cpp_commit": {
+              "type": "string",
+              "description": "llama.cpp commit hash used for imatrix/KLD"
+            },
+            "capture_tool": {
+              "type": "string",
+              "description": "Version of merge_stats.py tool"
+            }
+          }
+        }
+      }
+    },
+    "model_shape": {
+      "type": "object",
+      "description": "Verified model architecture dimensions",
+      "required": ["num_layers", "num_experts_per_layer", "top_k"],
+      "properties": {
+        "num_layers": {
+          "type": "integer",
+          "enum": [94],
+          "description": "Number of layers (must be 94 for Qwen3-235B-A22B)"
+        },
+        "num_experts_per_layer": {
+          "type": "integer",
+          "enum": [128],
+          "description": "Number of experts per layer (must be 128 for Qwen3-235B-A22B)"
+        },
+        "top_k": {
+          "type": "integer",
+          "enum": [8],
+          "description": "Top-K routing (must be 8 for Qwen3-235B-A22B)"
+        }
+      }
+    },
+    "experts": {
+      "type": "array",
+      "description": "Array of per-expert statistics, indexed by (layer_idx * 128 + expert_idx)",
+      "items": {
+        "type": "object",
+        "required": ["layer", "expert_index"],
+        "properties": {
+          "layer": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 93,
+            "description": "Layer index (0-93)"
+          },
+          "expert_index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 127,
+            "description": "Expert index within layer (0-127)"
+          },
+          "activation_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total number of times this expert was activated in routing telemetry"
+          },
+          "activation_fraction": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Fraction of tokens that routed to this expert"
+          },
+          "mean_gate_weight": {
+            "type": "number",
+            "description": "Mean gating weight for this expert (from top-8 gate logits)"
+          },
+          "quantization_sensitivity": {
+            "type": "object",
+            "description": "Sensitivity to quantization loss, per quant type",
+            "properties": {
+              "Q8_0": {
+                "type": "object",
+                "description": "Q8_0 quantization metrics",
+                "properties": {
+                  "kld": {
+                    "type": "number",
+                    "description": "Kullback-Leibler divergence from FP16 baseline"
+                  },
+                  "kld_stderr": {
+                    "type": "number",
+                    "description": "Standard error on mean KLD estimate"
+                  },
+                  "ppl_ratio": {
+                    "type": "number",
+                    "description": "Ratio of quantized to FP16 perplexity"
+                  },
+                  "imatrix_importance": {
+                    "type": "number",
+                    "description": "Importance matrix mean value for this expert's weights"
+                  }
+                }
+              },
+              "Q4_K_M": {
+                "type": "object",
+                "description": "Q4_K_M quantization metrics",
+                "properties": {
+                  "kld": {
+                    "type": "number"
+                  },
+                  "kld_stderr": {
+                    "type": "number"
+                  },
+                  "ppl_ratio": {
+                    "type": "number"
+                  },
+                  "imatrix_importance": {
+                    "type": "number"
+                  }
+                }
+              },
+              "Q4_K_S": {
+                "type": "object",
+                "description": "Q4_K_S quantization metrics",
+                "properties": {
+                  "kld": {
+                    "type": "number"
+                  },
+                  "kld_stderr": {
+                    "type": "number"
+                  },
+                  "ppl_ratio": {
+                    "type": "number"
+                  },
+                  "imatrix_importance": {
+                    "type": "number"
+                  }
+                }
+              },
+              "IQ3_S": {
+                "type": "object",
+                "description": "IQ3_S quantization metrics",
+                "properties": {
+                  "kld": {
+                    "type": "number"
+                  },
+                  "kld_stderr": {
+                    "type": "number"
+                  },
+                  "ppl_ratio": {
+                    "type": "number"
+                  },
+                  "imatrix_importance": {
+                    "type": "number"
+                  }
+                }
+              },
+              "IQ2_M": {
+                "type": "object",
+                "description": "IQ2_M quantization metrics",
+                "properties": {
+                  "kld": {
+                    "type": "number"
+                  },
+                  "kld_stderr": {
+                    "type": "number"
+                  },
+                  "ppl_ratio": {
+                    "type": "number"
+                  },
+                  "imatrix_importance": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          },
+          "sources": {
+            "type": "object",
+            "description": "Provenance: which run/tool produced each field",
+            "properties": {
+              "activation_count": {
+                "type": "string",
+                "description": "Source identifier for routing telemetry (e.g., run ID or filename)"
+              },
+              "activation_fraction": {
+                "type": "string"
+              },
+              "mean_gate_weight": {
+                "type": "string"
+              },
+              "quantization_sensitivity": {
+                "type": "string",
+                "description": "Source identifier for imatrix/KLD pass (e.g., llama.cpp commit + timestamp)"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

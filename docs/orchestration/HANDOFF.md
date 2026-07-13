@@ -56,13 +56,16 @@ in this repo; prompts in `docs/orchestration/prompts/` are self-contained.
 | W4 | GQA attention + KV | `w4-kernels-b` | DONE, merged (2026-07-12; 6/6 attn fixtures). T02 obsolete. KV analysis: `docs/notes/w4-kv-layout.md`. |
 | W5 | Router + expert MLP | `w5-kernels-c` | DONE, merged (incl. MSL fix). |
 | W6 | M1 viability (decode-sim, placement sim, f001) | `w6-m1-viability` | DEFERRED by owner (2026-07-12, "skip benchmarks for now"). Partial WIP in worktree `agent-a07b894d896d995d4`; T03 prompt ready when reactivated. |
-| T04 | M2a CPU forward pass | `t04-cpu-forward` | Started 2026-07-12 (Sonnet executor, attention via temporary stub pending W4 swap-in). |
+| T04 | M2a CPU forward pass | `t04-cpu-forward` | DONE, merged (2026-07-12). 5/5 fixture prompts, greedy exact, trace hook validated. `ds5 run` CLI works. 74/74 tests green. |
 
-**Pending orchestrator decision (flagged by W4, decide via ADR-005 amendment
-BEFORE M3/T07 starts):** KV cache dtype is frozen f32 with no dtype field in
+**Pending orchestrator decision (flagged by W4, URGENT — decide via ADR-005 amendment
+BEFORE T05/T07 starts):** KV cache dtype is frozen f32 with no dtype field in
 `AttnArgs`/`KvAppendArgs`. At 32K ctx on 235B, decode streams ~12 GiB/token
-of KV at f32; an f16-KV option should be decided while only one attention
-kernel exists. See `docs/notes/w4-kv-layout.md`.
+of KV at f32; an f16-KV option should be locked in now while only one attention
+kernel exists (making both CPU and Metal changes in lockstep later is expensive).
+See `docs/notes/w4-kv-layout.md` for the full analysis. **Action: read the note,
+decide f32-or-f16, commit an ADR-005 amendment if changing to f16 (no change to
+contracts.zig needed if staying f32).**
 
 **Hardware inputs owed by the project owner (Jesse)** — every prompt that
 needs them says what to use as a clearly-marked placeholder until they exist:

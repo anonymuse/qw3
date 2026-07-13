@@ -73,6 +73,59 @@ If those three values are anything else, **stop** — wrong artifact.
 **What it measures:** per (layer, expert) activation counts and gate weights over
 the router-calibration corpus. This is execution-plan hour-zero task 3.
 
+**Tooling note (verified 2026-07-12, instrumentation added 2026-07-13):** stock
+llama.cpp has **no CLI flag that dumps per-expert routing counts**. The M1
+telemetry capture instruments llama.cpp's eval path via its existing
+`ggml_backend_sched_eval_callback` hook — the same mechanism
+`examples/eval-callback` and `tools/imatrix` already use, so no llama.cpp core
+patch is needed. The instrumentation (a new `llama-telemetry-capture` example
+program) lives at
+`tools/expert_stats/llama_cpp_instrumentation/telemetry-capture.cpp`; its
+`README.md` explains why the hook suffices and how it was verified against
+`ggml-org/llama.cpp` @ `6eddde06a4f25d55d538b5d15628dcc2b6882147`. It watches
+the per-layer `"ffn_moe_topk-<il>"` (selected expert ids) and
+`"ffn_moe_weights_norm-<il>"` (post-normalization gate weight) tensors that
+`llm_graph_context::build_moe_ffn` (`src/llama-graph.cpp`) already names, and
+writes the telemetry JSON contract below directly — the merge tool consumes
+this file unmodified.
+
+### Build and run the instrumented capture
+
+```sh
+# One-time: install the instrumentation into your pinned llama.cpp checkout
+# (see tools/expert_stats/llama_cpp_instrumentation/README.md for details)
+mkdir -p /tmp/llama.cpp/examples/telemetry-capture
+cp tools/expert_stats/llama_cpp_instrumentation/telemetry-capture.cpp \
+   /tmp/llama.cpp/examples/telemetry-capture/telemetry-capture.cpp
+cp tools/expert_stats/llama_cpp_instrumentation/CMakeLists.txt \
+   /tmp/llama.cpp/examples/telemetry-capture/CMakeLists.txt
+sed -i.bak '/add_subdirectory(eval-callback)/a\
+    add_subdirectory(telemetry-capture)
+' /tmp/llama.cpp/examples/CMakeLists.txt
+
+cd /tmp/llama.cpp
+cmake -B build -DGGML_METAL=ON
+cmake --build build --config Release -j --target llama-telemetry-capture
+# Binary: build/bin/llama-telemetry-capture
+
+# Run over the router-calibration corpus (paths/hashes from §0)
+build/bin/llama-telemetry-capture \
+  -m "$MODEL" \
+  -f "$CORPUS" \
+  -o <repo-root>/bench/results/expert_stats/telemetry-<date>-run1.json \
+  --source-id "telemetry-<date>-run1" \
+  --model-id "Qwen3-235B-A22B-Instruct-2507" \
+  --model-hash "sha256:<hex from shasum -a 256 on $MODEL>" \
+  --corpus-id "router-calibration-corpus-v1" \
+  --corpus-hash "sha256:<hex from shasum -a 256 on $CORPUS>" \
+  --ngl 99
+```
+
+Each `n_ctx`-sized (default 4096) window of the corpus is decoded as an
+independent context (KV cache cleared between windows) — the same fixed-size
+chunking compromise `tools/perplexity`/`tools/imatrix` already make elsewhere
+in this runbook; routing telemetry does not carry cross-window attention
+context. Record this alongside the run's other documented compromises.
 **Honest tooling note (verified 2026-07-12):** stock llama.cpp has **no CLI flag
 that dumps per-expert routing counts**. The M1 telemetry capture instruments
 llama.cpp's eval path (an eval-callback or small local patch logging the

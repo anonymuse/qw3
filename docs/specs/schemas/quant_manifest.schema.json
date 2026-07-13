@@ -1,0 +1,220 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DS5 Quantization & Placement Manifest",
+  "description": "M4 placement/quant manifest for Qwen3-235B-A22B: per-expert node, residency tier, quant type, and provenance into expert_stats.json. See docs/specs/DS5_Quant_Manifest_v0.1.md. Field names align with docs/specs/schemas/expert_stats.schema.json (WP-1).",
+  "type": "object",
+  "required": ["manifest_version", "model_id", "model_shape", "expert_stats_source", "policy_parameters", "nodes"],
+  "additionalProperties": false,
+  "properties": {
+    "manifest_version": {
+      "type": "string",
+      "enum": ["0.1"]
+    },
+    "model_id": {
+      "type": "string",
+      "description": "Model identifier, e.g. 'Qwen3-235B-A22B-Instruct-2507'"
+    },
+    "model_shape": {
+      "type": "object",
+      "description": "Fixed model shape; cross-checked against GGUF metadata at load (refusal rule R1). Field names identical to expert_stats.schema.json model_shape.",
+      "required": ["num_layers", "num_experts_per_layer", "top_k"],
+      "additionalProperties": false,
+      "properties": {
+        "num_layers": { "type": "integer", "enum": [94] },
+        "num_experts_per_layer": { "type": "integer", "enum": [128] },
+        "top_k": { "type": "integer", "enum": [8] }
+      }
+    },
+    "expert_stats_source": {
+      "type": "object",
+      "description": "Identity of the expert_stats.json capture this manifest was built from. model_hash/corpus_id/capture_date/git_commit use the same field names as the expert_stats.schema.json header.",
+      "required": ["stats_file_hash", "model_hash", "capture_date", "git_commit"],
+      "additionalProperties": false,
+      "properties": {
+        "stats_file_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "SHA256 of the expert_stats.json file itself"
+        },
+        "model_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "SHA256 of the GGUF model file (copied from stats header)"
+        },
+        "corpus_id": { "type": "string" },
+        "capture_date": { "type": "string", "format": "date-time" },
+        "git_commit": { "type": "string" }
+      }
+    },
+    "policy_parameters": {
+      "type": "object",
+      "description": "Named thresholds of spec section 4.2. Values come from f001 measured data; null until supplied.",
+      "required": ["F_HOT", "F_WARM", "F_COOL", "S_HIGH", "S_LOW", "sensitivity_metric"],
+      "additionalProperties": false,
+      "properties": {
+        "F_HOT": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+        "F_WARM": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+        "F_COOL": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+        "S_HIGH": { "type": ["number", "null"] },
+        "S_LOW": { "type": ["number", "null"] },
+        "sensitivity_metric": {
+          "type": ["string", "null"],
+          "description": "Path into the expert_stats.json record the S thresholds apply to, e.g. 'quantization_sensitivity.Q4_K_M.kld'"
+        }
+      }
+    },
+    "nodes": {
+      "type": "object",
+      "description": "Exactly nodes B and C (Node A holds no decode-critical expert weights, Spec v0.3 section 6).",
+      "required": ["B", "C"],
+      "additionalProperties": false,
+      "properties": {
+        "B": { "$ref": "#/definitions/node" },
+        "C": { "$ref": "#/definitions/node" }
+      }
+    },
+    "quality_attestation": {
+      "type": "object",
+      "description": "Informational statements that binding rules (spec section 4.3) were applied; the loader re-checks, it does not trust these.",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "definitions": {
+    "node": {
+      "type": "object",
+      "required": ["role", "static_cap_bytes", "experts", "computed_static_total_bytes"],
+      "additionalProperties": false,
+      "properties": {
+        "role": { "type": "string", "enum": ["decode_worker"] },
+        "static_cap_bytes": {
+          "type": "integer",
+          "const": 33600000000,
+          "description": "Per-node static-weight cap: 33.6 GB (Spec v0.3 section 4)"
+        },
+        "experts": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/expert_placement" }
+        },
+        "computed_static_total_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 33600000000,
+          "description": "Sum of quantized_size_bytes over this node's experts; must equal the recomputed sum (loader refusal rule R2)"
+        }
+      }
+    },
+    "expert_placement": {
+      "type": "object",
+      "required": ["layer", "expert_index", "residency_tier", "quant_type", "quantized_size_bytes", "stats_provenance"],
+      "additionalProperties": false,
+      "properties": {
+        "layer": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 93,
+          "description": "Layer index (0-93); field name matches expert_stats.schema.json"
+        },
+        "expert_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 127,
+          "description": "Expert index within layer (0-127); field name matches expert_stats.schema.json"
+        },
+        "residency_tier": {
+          "type": "string",
+          "enum": ["hot", "warm", "cool", "cold"]
+        },
+        "quant_type": {
+          "type": "string",
+          "enum": ["Q8_0", "Q4_0", "Q4_K", "IQ3_S", "IQ2_M", "IQ2_XS", "IQ2_XXS"],
+          "description": "ADR-002 quant sequence"
+        },
+        "quantized_size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Estimated expert weight bytes at quant_type (GGML block arithmetic; spec section 6.2)"
+        },
+        "stats_provenance": { "$ref": "#/definitions/stats_provenance" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "stats_provenance": {
+                "properties": { "assignment_basis": { "const": "no_stats_default" } }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "quant_type": {
+                "enum": ["Q8_0", "Q4_0", "Q4_K"],
+                "description": "No stats, no downgrade (spec section 4.3 rule 3): never an I-quant without measured stats"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "stats_provenance": {
+      "type": "object",
+      "required": ["stats_file_hash", "expert_record_index", "assignment_basis", "frequency_percentile", "sensitivity_class", "sensitivity_metric"],
+      "additionalProperties": false,
+      "properties": {
+        "stats_file_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "Must equal expert_stats_source.stats_file_hash (loader refusal rule R3)"
+        },
+        "expert_record_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 12031,
+          "description": "Index into the stats file's experts array: layer * 128 + expert_index (per expert_stats.schema.json)"
+        },
+        "assignment_basis": {
+          "type": "string",
+          "enum": ["measured", "no_stats_default"]
+        },
+        "frequency_percentile": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Routing-frequency percentile from activation_fraction distribution; null iff no_stats_default"
+        },
+        "sensitivity_class": {
+          "type": ["string", "null"],
+          "enum": ["high", "medium", "low", null],
+          "description": "Derived via S_HIGH/S_LOW thresholds; null iff no_stats_default"
+        },
+        "sensitivity_metric": {
+          "type": ["string", "null"],
+          "description": "Path into the expert_stats.json record that drove sensitivity_class; null iff no_stats_default"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "assignment_basis": { "const": "measured" } } },
+          "then": {
+            "properties": {
+              "frequency_percentile": { "type": "number" },
+              "sensitivity_class": { "type": "string" },
+              "sensitivity_metric": { "type": "string" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "assignment_basis": { "const": "no_stats_default" } } },
+          "then": {
+            "properties": {
+              "frequency_percentile": { "type": "null" },
+              "sensitivity_class": { "type": "null" },
+              "sensitivity_metric": { "type": "null" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

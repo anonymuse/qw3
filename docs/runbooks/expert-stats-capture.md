@@ -126,6 +126,13 @@ independent context (KV cache cleared between windows) — the same fixed-size
 chunking compromise `tools/perplexity`/`tools/imatrix` already make elsewhere
 in this runbook; routing telemetry does not carry cross-window attention
 context. Record this alongside the run's other documented compromises.
+**Honest tooling note (verified 2026-07-12):** stock llama.cpp has **no CLI flag
+that dumps per-expert routing counts**. The M1 telemetry capture instruments
+llama.cpp's eval path (an eval-callback or small local patch logging the
+`top_k` expert IDs + gate weights per layer per token — capture instrumentation
+is owned by the M1 workstream, not this pack). Whatever the instrument is, its
+output must be reduced to the telemetry JSON contract below; the merge tool
+consumes only this contract.
 
 ### Telemetry JSON contract (input to merge_stats.py)
 

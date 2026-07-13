@@ -138,4 +138,5 @@ test {
     _ = @import("kernels/cpu/kernels_b.zig");
     _ = @import("kernels/cpu/kernels_c.zig");
     _ = @import("gguf/gguf.zig");
+    _ = @import("test_forward.zig");
 }

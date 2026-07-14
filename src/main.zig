@@ -20,6 +20,9 @@ const cpu = @import("kernels/cpu/ctx.zig");
 const kernels_a = @import("kernels/cpu/kernels_a.zig");
 const kernels_b = @import("kernels/cpu/kernels_b.zig");
 const kernels_c = @import("kernels/cpu/kernels_c.zig");
+const metal = @import("metal/metal.zig");
+const gpu_kernels = @import("kernels/gpu/kernels.zig");
+const JsonBuf = @import("shared/jsonbuf.zig").JsonBuf;
 
 const usage =
     \\usage:
@@ -28,6 +31,7 @@ const usage =
     \\                 [--sustained-secs N] [--quick]
     \\  ds5 health --host HOST [--port PORT]
     \\  ds5 run --model PATH --prompt-tokens "1,2,3" [--steps N] [--greedy]
+    \\                [--backend cpu|metal]
     \\  ds5 version
     \\
 ;
@@ -106,6 +110,7 @@ pub fn main(init: std.process.Init) !void {
         var prompt_str: ?[]const u8 = null;
         var n_steps: u32 = 8;
         var greedy = false;
+        var backend: []const u8 = "cpu";
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             if (std.mem.eql(u8, args[i], "--model")) {
@@ -116,6 +121,8 @@ pub fn main(init: std.process.Init) !void {
                 n_steps = try std.fmt.parseInt(u32, try requireValue(args, &i), 10);
             } else if (std.mem.eql(u8, args[i], "--greedy")) {
                 greedy = true;
+            } else if (std.mem.eql(u8, args[i], "--backend")) {
+                backend = try requireValue(args, &i);
             } else return badArg(args[i]);
         }
         const model_file = model_path orelse {
@@ -126,7 +133,14 @@ pub fn main(init: std.process.Init) !void {
             out.print("run requires --prompt-tokens CSV\n", .{});
             return error.MissingArgument;
         };
-        try runForward(alloc, model_file, prompt_csv, n_steps, greedy);
+        if (std.mem.eql(u8, backend, "cpu")) {
+            try runForward(alloc, model_file, prompt_csv, n_steps, greedy);
+        } else if (std.mem.eql(u8, backend, "metal")) {
+            try runForwardGpu(alloc, model_file, prompt_csv, n_steps, greedy);
+        } else {
+            out.print("unknown --backend {s} (expected cpu or metal)\n", .{backend});
+            return error.UnknownArgument;
+        }
     } else {
         out.print("{s}", .{usage});
         return error.UnknownCommand;
@@ -252,19 +266,138 @@ fn runForward(alloc: std.mem.Allocator, model_path: []const u8, prompt_csv: []co
     }
 }
 
-test {
-    _ = @import("shared/protocol.zig");
-    _ = @import("shared/activation_packet.zig");
-    _ = @import("shared/checksum.zig");
-    _ = @import("shared/manifest.zig");
-    _ = @import("shared/stats.zig");
-    _ = @import("shared/jsonbuf.zig");
-    _ = @import("shared/sysinfo.zig");
-    _ = @import("shared/contracts.zig");
-    _ = @import("shared/fixture.zig");
-    _ = @import("kernels/cpu/kernels_a.zig");
-    _ = @import("kernels/cpu/kernels_b.zig");
-    _ = @import("kernels/cpu/kernels_c.zig");
-    _ = @import("gguf/gguf.zig");
-    _ = @import("test_forward.zig");
+fn parsePromptTokens(alloc: std.mem.Allocator, prompt_csv: []const u8) ![]u32 {
+    var n_toks: usize = 0;
+    var it = std.mem.splitSequence(u8, prompt_csv, ",");
+    while (it.next()) |tok_str| {
+        if (std.mem.trim(u8, tok_str, " \t").len > 0) n_toks += 1;
+    }
+    const prompt = try alloc.alloc(u32, n_toks);
+    errdefer alloc.free(prompt);
+    var idx: usize = 0;
+    it = std.mem.splitSequence(u8, prompt_csv, ",");
+    while (it.next()) |tok_str| {
+        const trimmed = std.mem.trim(u8, tok_str, " \t");
+        if (trimmed.len > 0) {
+            prompt[idx] = try std.fmt.parseInt(u32, trimmed, 10);
+            idx += 1;
+        }
+    }
+    return prompt;
 }
+
+/// GPU (`--backend metal`) path: the same prefill + greedy-decode driver as
+/// runForward, over Engine(metal.Ctx, gpu_kernels) instead of the CPU
+/// provider. Additionally emits a run-metadata JSON (coding standard #4:
+/// every DS5 benchmark/run binary emits one) with per-layer GPU elapsed ns.
+fn runForwardGpu(alloc: std.mem.Allocator, model_path: []const u8, prompt_csv: []const u8, n_steps: u32, greedy: bool) !void {
+    const prompt = try parsePromptTokens(alloc, prompt_csv);
+    defer alloc.free(prompt);
+    if (prompt.len == 0) {
+        out.print("prompt-tokens cannot be empty\n", .{});
+        return;
+    }
+    const n_toks = prompt.len;
+
+    var model = gguf.Model.open(alloc, model_path) catch |err| {
+        out.print("failed to open {s}: {}\n", .{ model_path, err });
+        return err;
+    };
+    defer model.deinit();
+
+    const ctx = metal.Ctx.init(alloc) catch |err| {
+        out.print("failed to init Metal device (is this Apple Silicon?): {}\n", .{err});
+        return err;
+    };
+    defer ctx.deinit();
+    try gpu_kernels.loadShaders(ctx);
+
+    var weights = try forward.Weights.fromGguf(alloc, ctx, &model);
+    defer weights.deinit();
+
+    const GpuEngine = forward.Engine(metal.Ctx, gpu_kernels);
+    var engine = try GpuEngine.init(alloc, ctx, &weights, 64);
+    defer engine.deinit();
+
+    const vocab = weights.config.vocab_size;
+    const max_seq = n_toks + n_steps;
+    var all_logits = try alloc.alloc(f32, @as(u64, max_seq) * vocab);
+    defer alloc.free(all_logits);
+
+    gpu_kernels.beginTiming(alloc);
+    defer gpu_kernels.endTiming();
+
+    const wall_start = sys.monotonicNs();
+    try engine.forward(prompt, all_logits[0 .. @as(u64, n_toks) * vocab]);
+
+    var seq = try alloc.alloc(u32, max_seq);
+    defer alloc.free(seq);
+    @memcpy(seq[0..n_toks], prompt);
+
+    var next = forward.argmax(all_logits[(@as(u64, n_toks) - 1) * vocab .. @as(u64, n_toks) * vocab]);
+    for (0..n_steps) |step| {
+        seq[n_toks + step] = next;
+        const row_start = (@as(u64, n_toks) + step) * vocab;
+        const row_end = row_start + vocab;
+        try engine.forward(&.{next}, all_logits[row_start..row_end]);
+        next = forward.argmax(all_logits[row_start..row_end]);
+    }
+    const wall_ns = sys.monotonicNs() - wall_start;
+
+    var first = true;
+    for (seq[n_toks .. n_toks + n_steps]) |tok| {
+        if (!first) out.print(" ", .{});
+        out.print("{d}", .{tok});
+        first = false;
+    }
+    out.print("\n", .{});
+
+    if (greedy) {
+        var first_g = true;
+        for (seq[0 .. n_toks + n_steps]) |tok| {
+            if (!first_g) out.print(" ", .{});
+            out.print("{d}", .{tok});
+            first_g = false;
+        }
+        out.print("\n", .{});
+    }
+
+    try writeGpuRunMetadata(alloc, model_path, n_toks, n_steps, wall_ns);
+}
+
+/// Run-metadata JSON (coding standard #4): schema mirrors `ds5 bench link`'s
+/// (transport/linkbench.zig) — run_id/schema_version/backend fields plus the
+/// GPU-specific per-layer timing this deliverable requires. `gpu_ns_per_layer
+/// _boundary[i]` is the elapsed ns of the command-buffer batch that ended at
+/// layer i's router-sync flush; see kernels/gpu/kernels.zig's `layerNs` doc
+/// comment for exactly what that batch spans (not a perfectly isolated
+/// per-layer slice, by design — isolating it would cost the batching this
+/// deliverable also requires).
+fn writeGpuRunMetadata(alloc: std.mem.Allocator, model_path: []const u8, n_prompt_toks: usize, n_steps: u32, wall_ns: u64) !void {
+    var jb = JsonBuf.init(alloc);
+    const epoch = sys.epochSeconds();
+    try jb.print("{{\"run_id\":\"run-{d}\",\"benchmark\":\"run\",\"schema_version\":1,", .{epoch});
+    try jb.print("\"epoch_seconds\":{d},\"backend\":\"metal\",", .{epoch});
+    try jb.raw("\"ds5_version\":");
+    try jb.str(version.DS5_VERSION);
+    try jb.raw(",\"model\":");
+    try jb.str(model_path);
+    try jb.print(",\"n_prompt_tokens\":{d},\"n_decode_steps\":{d},\"wall_ns\":{d},", .{ n_prompt_toks, n_steps, wall_ns });
+    try jb.raw("\"gpu_ns_per_layer_boundary\":[");
+    for (gpu_kernels.layerNs(), 0..) |ns, i| {
+        if (i != 0) try jb.raw(",");
+        try jb.print("{d}", .{ns});
+    }
+    try jb.raw("]}");
+
+    try sys.mkdirPath(alloc, "bench/results");
+    var name_buf: [512]u8 = undefined;
+    const file_name = try std.fmt.bufPrint(&name_buf, "bench/results/run-{d}.json", .{epoch});
+    try sys.writeFileTrunc(alloc, file_name, jb.items());
+    out.print("run-metadata written to {s}\n", .{file_name});
+}
+
+// No `test {}` block here: `zig build test` uses src/test_cpu.zig as its
+// root instead of this file, specifically so this file's Metal import (for
+// `--backend metal`, above) never becomes part of that device-independent
+// step's module graph. See test_cpu.zig's doc comment.

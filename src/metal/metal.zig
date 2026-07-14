@@ -271,8 +271,16 @@ pub const Ctx = struct {
         @memcpy(contentsSlice(buf.handle, buf.offset + offset, bytes.len), bytes);
     }
 
+    /// T05: auto-flush a pending batch before reading. Any caller that has
+    /// been encoding dispatches without an explicit submit() (the layer-
+    /// batching pattern kernel providers use) still gets a coherent read —
+    /// download() is the one frozen-API entry point host code uses to pull
+    /// results back, so it is the correct place to guarantee freshness rather
+    /// than pushing this requirement onto every caller. No-op (and no extra
+    /// cost) when no batch is open, so existing begin()/.../submit()/download()
+    /// call sites are unaffected.
     pub fn download(self: *Ctx, buf: Buf, offset: u64, out: []u8) KernelError!void {
-        _ = self;
+        if (self.cmdbuf != null) try self.submit();
         @memcpy(out, contentsSlice(buf.handle, buf.offset + offset, out.len));
     }
 

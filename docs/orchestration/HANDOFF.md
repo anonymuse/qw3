@@ -57,6 +57,7 @@ in this repo; prompts in `docs/orchestration/prompts/` are self-contained.
 | W5 | Router + expert MLP | `w5-kernels-c` | DONE, merged (incl. MSL fix). |
 | W6 | M1 viability (decode-sim, placement sim, f001) | `w6-m1-viability` | DEFERRED by owner (2026-07-12, "skip benchmarks for now"). Partial WIP in worktree `agent-a07b894d896d995d4`; T03 prompt ready when reactivated. |
 | T04 | M2a CPU forward pass | `t04-cpu-forward` | DONE, merged (2026-07-12). 5/5 fixture prompts, greedy exact, trace hook validated. `ds5 run` CLI works. 74/74 tests green. |
+| T05 | M2b GPU forward pass | `t05-gpu-forward` | DONE (2026-07-13). GPU kernel provider (`src/kernels/gpu/kernels.zig`) dispatches kernels_a/b/c.metal exactly per their PORTING docs; router stays CPU-only per PORTING-moe.md §1. `zig build test-gpu` 81/81 green on real Apple M5 hardware: all per-op fixtures (rmsnorm/rope/matmul_quant/attention/router/expert_mlp) match the CPU oracle in tolerance, 5/5 e2e prompts logits-in-tolerance + greedy exact, GPU-vs-CPU direct trace diff passes all 4 layers (worst max_abs_diff 4.3e-7), `zig build test`/`test-metal` unaffected (74/74, 21/21). `ds5 run --backend metal` works, emits per-layer GPU-ns run-metadata JSON to `bench/results/`. One deliberate scope decision below (KV dtype) needs orchestrator follow-up before it's actionable. |
 
 **DECIDED 2026-07-12:** KV cache dtype frozen to **f16** via ADR-005 amendment (rationale:
 M3 inter-node decode bandwidth at 32K context, placement budget headroom, fixture regen
@@ -64,6 +65,23 @@ when the next orchestrator has numpy installed). Attention loads f16 into f32 re
 for computation (standard pattern). T05 executor will implement f16 loads in Metal
 shader. Existing f32 fixtures remain until regeneration; tests will adapt as kernels
 update to read f16 (T05 responsibility).
+
+**T05 note on the above (2026-07-13):** the 2026-07-12 amendment edited ADR-005 §1's
+prose but not `contracts.zig` (KvAppendArgs/AttnArgs doc comments still say f32, no
+dtype field was added), not PORTING-kernels-a.md/PORTING-kernels-b.md (both still
+specify f32 cache params/layout as the frozen dispatch contract), not
+kernels_a.metal/kernels_b.metal (both still f32), not the CPU reference kernels
+(`kernels_a.zig`/`kernels_b.zig`, still f32 — T05 is forbidden from editing these),
+and the committed fixtures still store f32 cache tensors. Implementing f16 on the GPU
+side only would violate "implement EXACTLY these PORTING docs," desync CPU vs GPU cache
+layout in a way `engine/forward.zig`'s single `cache_bytes` calc doesn't parametrize per
+backend, and risk the attention tolerance on an unreviewed numerics change — so T05 kept
+the GPU KV cache f32, matching the still-frozen PORTING docs and the CPU reference
+exactly (confirmed bit-close via direct GPU-vs-CPU trace diff, see T05 scoreboard row).
+**Before f16 actually lands**, a follow-up needs: `contracts.zig` (add a cache dtype
+field or a frozen-f16 rule), both PORTING-kernels-a/b.md, both kernels_a/b.metal, the CPU
+reference kernels_a/b.zig, and a fixture regen — i.e. a real ADR-005 amendment PR, not a
+one-file change.
 
 **Hardware inputs owed by the project owner (Jesse)** — every prompt that
 needs them says what to use as a clearly-marked placeholder until they exist:

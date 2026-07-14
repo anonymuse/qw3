@@ -39,7 +39,7 @@ kernel test loads golden tensors via `src/shared/fixture.zig` so the pass rule
   post-correctness optimization, gated by a fixture re-run.)
 - Expert banks are single 3-D tensors; expert `e` of `ne = {k, n, n_experts}` starts at
   byte offset `e · rowBytes(k) · n`.
-- KV cache per layer: two f32 buffers `[n_kv_heads, max_ctx, head_dim]` (K and V).
+- KV cache per layer: two f16 buffers `[n_kv_heads, max_ctx, head_dim]` (K and V). Attention loads f16 and accumulates in f32.
 - All wire and file formats are little-endian / native Apple-Silicon layout (A-12).
 
 ## 2. Router semantics (never altered — ADR-001 rule 1)

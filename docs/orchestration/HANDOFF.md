@@ -1,247 +1,146 @@
-# DS5 Orchestration Handoff (2026-07-13)
+# DS5 Orchestration Handoff — Weeks 2–3
 
-**Status:** Active orchestration document  
-**Updated:** 2026-07-13 ~14:30  
-**Executor:** planning-architecture-review-b561d6  
-**Governing specs:** DS5_Execution_Plan_v0.3.md, DS5_Project_Spec_v0.3.md, ADR-001..006  
+**Audience:** the orchestrating agent (Opus-class) and task executor agents
+(Haiku/Sonnet-class). Written 2026-07-11 by the week-1 orchestrator so that no
+frontier-model context is required to continue. Everything an executor needs is
+in this repo; prompts in `docs/orchestration/prompts/` are self-contained.
 
----
+## 0. Roles and budget policy
 
-## Executive Summary
+- **Orchestrator (Opus):** owns merges, contract decisions, gate judgments,
+  and writing/adjusting executor prompts. Does NOT write kernels or parsers
+  itself unless an executor has failed twice.
+- **Executors (Haiku first, Sonnet on escalation):** one task prompt each, in
+  an isolated git worktree, on a `tNN-*` feature branch. An executor that is
+  blocked >half a day cuts scope per its prompt's scope-cut rule rather than
+  slipping the gate (standing rule from the project owner).
+- **Parallelism cap: 3 concurrent agents.** The account session limit was
+  tripped repeatedly in week 1 by wider fan-out. Queue the rest.
+- **Escalation ladder:** Haiku fails/flails → same prompt to Sonnet → still
+  failing → orchestrator does it inline → still failing → ask the project
+  owner. Never silently re-scope.
 
-Main branch (7ca4dbb) is green: 74/74 tests pass. M2a CPU forward (T04) merged; M2b GPU forward (T05) actively running under Sonnet executor (agentId: a43664913d9aca929). Critical blocking dependencies for T06/T07 are the 30B GGUF model (~32GB, placed at `~/ds5-models/qwen3-30b-a3b-instruct-2507-gguf/`) and completion of T05. **Next executable step after T05:** T06 (real-weights correctness gate) when 30B GGUF lands.
+## 1. Non-negotiables (verbatim from ADRs; executors must not violate)
 
----
+1. Never alter top-8 routing semantics (ADR-001 rule 1; frozen in
+   `src/shared/contracts.zig` RouterArgs docs).
+2. Nothing in `src/shared/contracts.zig` changes without an orchestrator
+   decision recorded as an ADR-005 amendment. A change that "makes my branch
+   compile" is a contract violation.
+3. No ggml/llama.cpp/MLX code linked into the runtime (ADR-002). Reference
+   implementations are offline oracles only.
+4. Raw-libc I/O only (`src/shared/sys.zig` pattern). Never `std.Io`.
+5. A kernel/feature is DONE when it matches golden fixtures within manifest
+   tolerances — never when it "looks right".
+6. Every benchmark binary emits run-metadata JSON (Benchmark Spec v0.2 §5).
+7. Loader refuses >33.6GB/node static weights without explicit override.
 
-## Execution State (as of 2026-07-13 ~14:30)
+## 2. State snapshot (2026-07-11, end of week 1)
 
-### Completed Tasks
+**Branches/PRs** (repo `anonymuse/qw3`):
+- `main` — M0 only (mesh bench, daemon, transport).
+- `d1-interface-freeze` — contracts.zig, ADR-005, fixture.zig, CPU reference
+  ctx, `tools/make_fixtures.py`, synthetic fixture set (112 files). **PR #2.**
+- `integration` — stacked on d1; has W2+W3+W5 merged, all green. **PR #3.**
+  Merge #2 then #3 (or merge #3 alone after retargeting) before week-2 work.
+- CPU tests: `zig build test` → 43/43. GPU tests: `zig build test-metal` →
+  20/20 (needs any Apple Silicon GPU; dev M5 Air works).
 
-| Task | Milestone | Status | Merged | Notes |
-|---|---|---|---|---|
-| T01 | M2 GGUF parser | ✅ DONE | 2026-07-12 | Zig GGUF loader + oracle fixture format (DS5T) |
-| T02 | M2 attention kernels | ✅ DONE | 2026-07-12 | GQA + RoPE + (per ADR-005 amendment) f16 KV load-to-f32 compute |
-| T03 | M1 viability model | ⏸️ DEFERRED | — | Owner deferred 2026-07-12; M1 data capture (routing telemetry) owns this |
-| T04 | M2a CPU forward | ✅ DONE | 2026-07-13 13:23 | Engine + trace hook; 74/74 tests green |
+**Workstream scoreboard:**
 
-**Merged commit:** 7ca4dbb  
-**Test suite:** 74/74 pass (CPU forward verified against oracle fixtures)  
-**Code freeze:** Interface frozen per ADR-005 (`src/shared/contracts.zig`)
-
-### Running Executors
-
-| Task | Milestone | Executor | Agent ID | Status | Deadline |
-|---|---|---|---|---|---|
-| T05 | M2b GPU forward | Sonnet | a43664913d9aca929 | RUNNING ~14:00 | Unblock T06 after 1–2 days or escalate |
-
-**T05 scope:** Metal kernels for Q8_0 dequant+matmul, FP32-accumulate, f16 KV load (ADR-005 amendment), GPU fused expert MLP  
-**T05 execution location:** Dev machine (M5 MacBook Air, 24GB) against synthetic oracle fixtures  
-**T05 gates:** GPU forward output == CPU forward output, deterministic under synthetic fixtures (per ADR-002 oracle model)  
-**T05 success:** All GPU tests pass on dev machine; GPU kernels ready for T06 to use on real 30B GGUF on cluster node  
-**T05 expected output:** Green GPU tests, merged into integration branch
-
-### Pending (blocked on T05 + 30B GGUF)
-
-| Task | Milestone | Scope | Execution location | Unblock condition |
-|---|---|---|---|---|
-| T06 | M2 real-weights | Qwen3-30B-A3B forward on real weights (GPU paths from T05) | M5 Max cluster node (B or C, 48GB) | T05 merged + 30B GGUF at `~/ds5-models/` on cluster node |
-| T07 | M3 distributed | 30B-A3B split across B/C over M0 transport | Cluster nodes B+C | T06 gate + distributed test harness |
-
----
-
-## Execution DAG and Dependencies
-
-```
-M0 (mesh reality)
-  ├─ Link benchmarks + metadata
-  └─ Model downloads (background task, user-triggered)
-        ├─ 30B GGUF (~32GB) → T06 unblock
-        └─ 235B GGUF (~85GB, no binary link) → M1 telemetry capture
-
-M1 (viability model) [T03 deferred; M1 data capture = routing telemetry]
-  ├─ Input: 235B router-calibration corpus + per-layer expert-usage JSON
-  ├─ Output: docs/findings/f001 (projected tok/s ceiling decomposition)
-  └─ Gate: go/no-go vs >12 tok/s target
-
-M2 (single-node engine core)
-  ├─ T01 ✅ GGUF parser
-  ├─ T02 ✅ Attention kernels (GQA + RoPE)
-  ├─ T04 ✅ CPU forward (engine + all kernels)
-  ├─ T05 🔄 GPU forward (Metal Q8_0/matmul/MLP)
-  └─ T06 ⏳ Real-weights gate (30B-A3B on real weights, all paths GPU)
-       Gate: 30B output == oracle 30B (deterministic)
-
-M3 (distributed correctness) [T07]
-  ├─ Input: T06 + distributed transport harness
-  ├─ Scope: 30B-A3B across B/C with packets + checksums
-  └─ Gate: Distributed output == single-node output
-
-M4 (235B placement + runtime) [stretch after M3]
-  ├─ Placement/quant manifests
-  ├─ I-quant dequant kernels
-  ├─ Tiered expert residency + promotion
-  └─ 8K/32K benchmarks vs >12 tok/s target
-
-M5 (findings) [continuous]
-  └─ docs/findings/ write-ups, README
-```
-
----
-
-## Blocking Dependencies for Next Phase
-
-### 1. T05 Completion (in progress)
-
-**What:** Metal GPU kernels (Q8_0 dequant, matmul, FP32-accumulate, fused MLP) match CPU oracle  
-**Owner:** T05 executor (Sonnet, agentId a43664913d9aca929)  
-**ETA:** 1–2 days from spawn (~2026-07-14/15)  
-**Merge gate:** 74/74 GPU tests pass, GPU outputs bit-identical to CPU under deterministic seed  
-**Action if blocked:** Escalate to project owner; check for Metal/MSL or fixture mismatch issues
-
-### 2. 30B GGUF Arrival
-
-**What:** Qwen3-30B-A3B-Instruct-2507 Q8_0 GGUF (~32GB)  
-**Expected location:** `~/ds5-models/qwen3-30b-a3b-instruct-2507-gguf/`  
-**Download tool:** `./tools/download_models.sh` (user-triggered, runs on a worker node with >150GB free disk)  
-**Status:** ⏳ PENDING (user responsibility per M0 runbook)  
-**Critical for:** T06 unblock (real-weights correctness gate)  
-**Action:** Unblock T06 executor immediately upon arrival
-
----
-
-## Next Executor Checklist (T06 = Real-Weights Gate)
-
-**Execution location: M5 Max cluster node (B or C, 48GB)**
-
-When 30B GGUF arrives and T05 merges:
-
-1. **Verify T05 merged:** Check `git log main | head` contains T05 commit (GPU kernels against synthetic fixtures)  
-2. **SSH to cluster node B or C:** T06 must run on a cluster M5 Max; dev machine (24GB) cannot hold 30B GGUF  
-3. **Verify 30B GGUF on cluster node:** Confirm `~/ds5-models/qwen3-30b-a3b-instruct-2507-gguf/model.gguf` exists (~30GB) and is readable  
-4. **Run T06 scope on cluster node:**  
-   - Load 30B-A3B from real GGUF (Q8_0, ~30GB)  
-   - Run forward pass (all GPU paths: Q8_0 dequant, matmul, FP32-accumulate, f16 KV load, fused MLP, router/top-8)  
-   - Verify output == oracle 30B fixture (per `tests/fixtures/`)  
-   - Verify determinism under `--seed` flag  
-   - Validate against synthetic oracle (same model, 4-layer test variant) to ensure GPU kernels match  
-5. **Merge criteria:**  
-   - New test suite `zig build test` with real-weights harness passes 100% on cluster node  
-   - No regression in CPU forward tests  
-   - CI (if wired) is green  
-6. **Next handoff:** After T06 merges on cluster node, unblock T07 (M3 distributed) with distributed transport harness  
-
----
-
-## Decisions Locked (No Re-litigation)
-
-| ADR | Scope | Decided | Reference |
+| WS | Scope | Branch | Status |
 |---|---|---|---|
-| ADR-001 | Model selection (Qwen3-235B-A22B + 30B-A3B bring-up) | 2026-07-08 | Binding |
-| ADR-002 | Kernel strategy (zero linked ML library, oracle fixtures, no route-through-A) | 2026-07-08 | Binding |
-| ADR-003 | Bring-up model (30B-A3B only, dense baseline cut) | 2026-07-08 | Binding |
-| ADR-004 | Auxiliary hardware (no Mac minis, RTX box, or foreign nodes) | 2026-07-08 | Binding |
-| ADR-005 | Interface freeze (contracts.zig, dtype set, kernel API, GGUF API, fixture format) | 2026-07-12 | Binding; amended 2026-07-13 for KV f16 |
-| ADR-006 | MPP scope (matmul2d in scope for prefill/batch GEMM only) | 2026-07-13 | Binding |
+| W1 | GGUF parser | `w1-gguf-parser` | DONE, merged (2026-07-12). T01 obsolete. |
+| W2 | Metal glue | `w2-metal-glue` | DONE, merged into integration. |
+| W3 | RMSNorm/RoPE/matmul | `w3-kernels-a` | DONE, merged. |
+| W4 | GQA attention + KV | `w4-kernels-b` | DONE, merged (2026-07-12; 6/6 attn fixtures). T02 obsolete. KV analysis: `docs/notes/w4-kv-layout.md`. |
+| W5 | Router + expert MLP | `w5-kernels-c` | DONE, merged (incl. MSL fix). |
+| W6 | M1 viability (decode-sim, placement sim, f001) | `w6-m1-viability` | DEFERRED by owner (2026-07-12, "skip benchmarks for now"). Partial WIP in worktree `agent-a07b894d896d995d4`; T03 prompt ready when reactivated. |
+| T04 | M2a CPU forward pass | `t04-cpu-forward` | DONE, merged (2026-07-12). 5/5 fixture prompts, greedy exact, trace hook validated. `ds5 run` CLI works. 74/74 tests green. |
 
-**Amendment to ADR-005 (2026-07-13 13:30):** KV cache dtype frozen to **f16** (rationale: M3 inter-node decode bandwidth at 32K context). Attention loads f16 into f32 registers for computation. Existing f32 fixtures remain; tests adapt as T05 updates kernel reads.
+**DECIDED 2026-07-12:** KV cache dtype frozen to **f16** via ADR-005 amendment (rationale:
+M3 inter-node decode bandwidth at 32K context, placement budget headroom, fixture regen
+when the next orchestrator has numpy installed). Attention loads f16 into f32 registers
+for computation (standard pattern). T05 executor will implement f16 loads in Metal
+shader. Existing f32 fixtures remain until regeneration; tests will adapt as kernels
+update to read f16 (T05 responsibility).
 
----
+**Hardware inputs owed by the project owner (Jesse)** — every prompt that
+needs them says what to use as a clearly-marked placeholder until they exist:
+1. Qwen3-30B-A3B Q8_0 GGUF (~32GB) at `~/ds5-models/qwen3-30b-a3b-instruct-2507-gguf/` on a worker node (`tools/download_models.sh`).
+2. 3-node mesh `ds5 bench link` JSONs → `bench/results/` (runbook §3).
+3. llama.cpp 235B router-telemetry JSON (per-layer expert-usage distribution).
 
-## Known Issues & Landmines
+## 3. Task DAG (weeks 2–3)
 
-| Issue | Scope | Mitigation |
-|---|---|---|
-| `zig build test` cosmetic failure line | Zig 0.16 wart; tests write to stderr | Build Summary + exit code 0 are ground truth; ignore "failed command:" |
-| Worktree branch trap | Easy to commit on wrong branch | Always `git branch --show-current` before committing |
-| Metal link flags required | Build issue | `-lobjc -framework Metal -framework Foundation -framework CoreGraphics` must be in build.zig |
-| A-09: dispatch overhead unbounded | Performance risk | Microbench per-layer dispatch before M2 kernel design freeze; target <380 µs/layer measured |
-| Fixture f32 vs f16 mismatch | T05 concern | Tests use f32 fixtures; T05 kernels read f16 KV; tolerance rule must adapt or new f16 fixtures required |
-
----
-
-## Assumptions Still Unmeasured (Assumptions Ledger)
-
-| Assumption | Measurement | Trigger |
-|---|---|---|
-| A-01: Node bandwidth (A:307GB/s, B/C:614GB/s) | M0 mesh run | User responsibility |
-| A-02: TB5 link latency & jitter | M0 bench link (loopback done, mesh pending) | User responsibility |
-| A-04: Expert routing skew enables tiering | M1 telemetry capture (235B corpus) | T03 deferred; blocking M1 findings |
-| A-06: 33.6GB/node cap leaves runtime headroom | Real Metal heap behavior at 32K context | Measure during T06/T07 |
-| A-09: Per-layer dispatch overhead | Microbench on real cluster node | Before M2 kernel freeze (do before T06) |
-
----
-
-## Recommended Reading Order
-
-For next executor:
-
-1. **This file** (you are here) — handoff summary, execution state, DAG  
-2. `docs/specs/DS5_Execution_Plan_v0.3.md` — milestone definitions and gates  
-3. `docs/specs/DS5_Project_Spec_v0.3.md` — architecture, constraints, goals  
-4. `docs/decisions/ADR-001..006.md` — locked trade-offs and rationales  
-5. `docs/reviews/2026-07-12_airplane_arch_reviews_response.md` — what we adopted and rejected  
-6. `docs/work-packs/2026-07-12-review-incorporation/*.md` — WP-1..3 deliverables  
-7. `docs/backlog/DS5_Phase2_Optimization_Backlog.md` — deferred optimizations and when to revisit  
-
----
-
-## Integration Playbook
-
-When T05 completes and 30B GGUF arrives:
-
-```sh
-# Step 1: Verify T05 merged
-git log main --oneline | head -3
-# Expect: T05 commit visible
-
-# Step 2: Verify 30B GGUF
-ls -lh ~/ds5-models/qwen3-30b-a3b-instruct-2507-gguf/
-# Expect: model.gguf ~32GB + metadata
-
-# Step 3: Spawn T06 executor (real-weights correctness gate)
-# - Load 30B from ~/ds5-models/
-# - Forward pass GPU path vs oracle fixture
-# - Determinism check
-# - Merge when tests green
-
-# Step 4: After T06 merges, spawn T07 (M3 distributed)
-# - Transport + packet contracts
-# - 30B across B/C
-# - Checksum validation
+```
+T01 finish W1 (GGUF parser)  ──┐
+T02 finish W4 (GQA attention) ─┼→ T04 M2a CPU forward pass (synthetic) → T05 M2b GPU forward pass
+T03 finish W6 (M1/f001 draft) ─┘         │                                    │
+        [30B GGUF lands] ────────────────┴→ T06 M2c real-weights gate ─→ T07 M3 distributed (2-proc, then B/C)
+        [mesh JSONs land] ──→ T03 update → T09
+        [telemetry lands] ──→ T08 235B placement + IQ2 kernels (STRETCH; only after T07 gate) 
+T09 ship: f001 final, README, runbooks, PRs (last 2 days, always runs)
 ```
 
----
+Suggested calendar: T01–T03 days 1–2; T04 days 2–3; T05 days 3–4; T06 the day
+the 30B lands; T07 days 5–7; T08 only if T07 gate passed; T09 always.
 
-## Roll-Forward Plan (If T05 Stalls)
+Model assignment: T01/T02/T03 Haiku (finishing well-scoped work), T04 Sonnet
+(new wiring, subtle), T05 Sonnet, T06 Sonnet + orchestrator review, T07 Sonnet,
+T08 Sonnet, T09 Haiku, DEBUG template Haiku-per-layer with Sonnet on the hunt.
 
-If T05 is blocked >48 hours after spawn:
+## 4. Integration playbook (orchestrator, after every executor report)
 
-1. Check Metal/MSL compiler errors in T05 agent logs  
-2. Escalate to project owner with:
-   - T05 working tree state (`git status`)
-   - Last successful test run output  
-   - Any Zig/Metal/macOS toolchain issues  
-3. Owner decision: pivot to simpler GPU path, or escalate toolchain issue  
+1. `cd` a clean checkout of `integration`; `git merge --no-edit <branch>`.
+2. Wire new test roots: CPU-testable modules get `_ = @import(...)` in
+   `src/main.zig`'s test block; GPU-dependent tests stay in their own
+   `zig build <step>` (pattern: `test-metal` in build.zig — GPU tests must NOT
+   make `zig build test` device-dependent).
+3. Run `zig build test --summary all` and `zig build test-metal --summary all`.
+   Both must fully pass — no skips, no tolerance edits.
+4. Commit with a body that names what was validated; push `integration`.
+5. Update the scoreboard in this file and `docs/assumptions.md` if a
+   measurement replaced an assumption.
+6. Contract dispute (two branches need incompatible contract reads): stop the
+   losing executor, decide, record an ADR-005 amendment, restart the executor
+   with the amended prompt. Executors never negotiate contracts between
+   themselves.
 
-If 30B GGUF doesn't arrive within 2 days of T05 merge:
+## 5. Known landmines (hard-won; read before debugging anything)
 
-1. Check `~/ds5-models/` for partial download or errors  
-2. Verify download tool: `./tools/download_models.sh` ran without errors  
-3. Owner escalation: check disk space, network, or mirror availability  
+- **Zig 0.16 cosmetic wart:** `zig build test` prints a red
+  `failed command:` line when passing tests write to stderr. Exit code 0 and
+  the Build Summary are the truth. Do not "fix" passing tests.
+- **Worktree branch trap:** harness-created worktrees sometimes reset to a
+  session branch based on `main`. ALWAYS `git branch --show-current` before
+  committing; if you're not on your task branch, check it out first.
+- **Metal via zig:** link `-lobjc -framework Metal -framework Foundation
+  -framework CoreGraphics` (CoreGraphics is required or
+  `MTLCreateSystemDefaultDevice` returns nil in CLI processes).
+  `objc_msgSend` must be cast to the exact concrete signature per call-site.
+  Command buffers/encoders are autoreleased — bracket each batch in its own
+  autorelease pool, never hold across `submit()`.
+- **MSL attribute rule:** all thread-position attribute parameters in one
+  kernel must be all-scalar or all-same-width vectors (this bug shipped once,
+  in kernels_c.metal, fixed on integration).
+- **Buffers:** `newBufferWithBytesNoCopy` needs page-aligned pointer AND
+  page-multiple length — wrap the WHOLE GGUF mmap once, address tensors via
+  `Buf.offset`. `newBufferWithLength` is not zeroed; use the glue's
+  `createBuffer` (zero-fills) for accumulators.
+- **A-09 measured:** ~380–590 µs per synchronous one-dispatch command buffer.
+  Batch all per-token dispatches into as few command buffers as possible
+  (glue `begin()`/`submit()` brackets a batch). Per-layer sync = ~40ms/token
+  = failure.
+- **Fixture comparisons:** pass iff `|actual-oracle| <= atol + rtol*|oracle|`
+  elementwise; router expert IDs compare as integers, exact. Tolerances live
+  in the fixture manifest, defaults in ADR-005 §4. Never loosen unilaterally.
 
----
+## 6. What "handed off" means
 
-## Success Criteria for This Handoff
-
-✅ **This phase (planning-architecture-review) is complete when:**
-
-1. This handoff document is committed to the integration branch  
-2. T05 executor can reference this document as a single source of truth  
-3. No ambiguity about next steps (T06 scope, gates, blockers)  
-4. ADRs 001–006 are all filed and current  
-5. Integration branch is ready for T06/T07 executors  
-
----
-
-**Co-authored by planning-architecture-review-b561d6 (2026-07-13)**  
-**Next handoff:** T06 real-weights gate executor
+An Opus orchestrator session starts by reading this file, then:
+`git log --oneline integration | head`, `TaskList`-equivalent triage of which
+T-prompts are unstarted/running/done (tracked in §3 scoreboard — keep it
+updated), spawn the next executor(s) per the DAG with the prompt file contents
+as the task prompt, cap 3, merge per §4. Repeat. The prompts assume no memory
+of week 1 — they name every file and command they depend on.

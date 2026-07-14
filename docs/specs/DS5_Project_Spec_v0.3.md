@@ -51,6 +51,12 @@ gate (e.g., no throughput work that bends routing semantics).
 | Custom quantization pipeline | Deleted (v0.3) | GGUF ingestion of existing community/`llama-quantize` artifacts |
 | Dense baseline, route-through-A correctness mode | Cut (ADR-002/003) | Oracle fixtures replace both |
 | Multi-user serving, non-Apple backends, model-plugin abstractions | Out of scope | Narrowness is intentional |
+| Placement/prefetch optimizations (co-activation grouping, replicated-attention expert-parallel hybrid, router-driven prefetch) | Deferred to Phase 2 | Proven but out of V1 scope; trigger conditions in `docs/backlog/DS5_Phase2_Optimization_Backlog.md` |
+
+V1 topology is layer-parallel (placement spec §3): B owns layers 0–46, C owns 47–93,
+A is control plane / sampling / lm_head / cold-expert host. The layer-parallel vs
+expert-parallel decision and the deferred optimizations above are recorded in the
+Phase-2 backlog.
 
 ## 4. Hardware assumptions
 

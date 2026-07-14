@@ -35,16 +35,17 @@ Main branch (7ca4dbb) is green: 74/74 tests pass. M2a CPU forward (T04) merged; 
 | T05 | M2b GPU forward | Sonnet | a43664913d9aca929 | RUNNING ~14:00 | Unblock T06 after 1–2 days or escalate |
 
 **T05 scope:** Metal kernels for Q8_0 dequant+matmul, FP32-accumulate, f16 KV load (ADR-005 amendment), GPU fused expert MLP  
-**T05 gates:** GPU forward output == CPU forward output, deterministic under oracle fixtures  
-**T05 blockers:** None (CPU forward provides oracle; kernels ship with tests)  
+**T05 execution location:** Dev machine (M5 MacBook Air, 24GB) against synthetic oracle fixtures  
+**T05 gates:** GPU forward output == CPU forward output, deterministic under synthetic fixtures (per ADR-002 oracle model)  
+**T05 success:** All GPU tests pass on dev machine; GPU kernels ready for T06 to use on real 30B GGUF on cluster node  
 **T05 expected output:** Green GPU tests, merged into integration branch
 
 ### Pending (blocked on T05 + 30B GGUF)
 
-| Task | Milestone | Scope | Unblock condition |
-|---|---|---|---|
-| T06 | M2 real-weights | Qwen3-30B-A3B forward on real weights | T05 merged + 30B GGUF at `~/ds5-models/` |
-| T07 | M3 distributed | 30B-A3B split across B/C over M0 transport | T06 gate + distributed test harness |
+| Task | Milestone | Scope | Execution location | Unblock condition |
+|---|---|---|---|---|
+| T06 | M2 real-weights | Qwen3-30B-A3B forward on real weights (GPU paths from T05) | M5 Max cluster node (B or C, 48GB) | T05 merged + 30B GGUF at `~/ds5-models/` on cluster node |
+| T07 | M3 distributed | 30B-A3B split across B/C over M0 transport | Cluster nodes B+C | T06 gate + distributed test harness |
 
 ---
 
@@ -110,20 +111,24 @@ M5 (findings) [continuous]
 
 ## Next Executor Checklist (T06 = Real-Weights Gate)
 
+**Execution location: M5 Max cluster node (B or C, 48GB)**
+
 When 30B GGUF arrives and T05 merges:
 
-1. **Verify T05 merged:** Check `git log main | head` contains T05 commit  
-2. **Verify 30B GGUF:** Confirm `~/ds5-models/qwen3-30b-a3b-instruct-2507-gguf/` exists and is readable  
-3. **Run T06 scope:**  
-   - Load 30B-A3B from real weights  
-   - Run forward pass (all GPU paths, Q8_0 dequant path, MLP path, router path)  
-   - Verify output == oracle 30B fixture (per `tests/fixtures/synthetic/model.gguf`)  
+1. **Verify T05 merged:** Check `git log main | head` contains T05 commit (GPU kernels against synthetic fixtures)  
+2. **SSH to cluster node B or C:** T06 must run on a cluster M5 Max; dev machine (24GB) cannot hold 30B GGUF  
+3. **Verify 30B GGUF on cluster node:** Confirm `~/ds5-models/qwen3-30b-a3b-instruct-2507-gguf/model.gguf` exists (~30GB) and is readable  
+4. **Run T06 scope on cluster node:**  
+   - Load 30B-A3B from real GGUF (Q8_0, ~30GB)  
+   - Run forward pass (all GPU paths: Q8_0 dequant, matmul, FP32-accumulate, f16 KV load, fused MLP, router/top-8)  
+   - Verify output == oracle 30B fixture (per `tests/fixtures/`)  
    - Verify determinism under `--seed` flag  
-4. **Merge criteria:**  
-   - New test suite `zig build test` with real-weights harness passes 100%  
+   - Validate against synthetic oracle (same model, 4-layer test variant) to ensure GPU kernels match  
+5. **Merge criteria:**  
+   - New test suite `zig build test` with real-weights harness passes 100% on cluster node  
    - No regression in CPU forward tests  
    - CI (if wired) is green  
-5. **Next handoff:** After T06 merges, unblock T07 (M3 distributed) with distributed transport harness  
+6. **Next handoff:** After T06 merges on cluster node, unblock T07 (M3 distributed) with distributed transport harness  
 
 ---
 

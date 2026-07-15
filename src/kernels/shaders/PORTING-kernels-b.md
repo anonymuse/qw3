@@ -7,14 +7,12 @@ fixture test (the six `op == "attention"` synthetic cases) is the template for t
 Metal-vs-oracle gate, and CPU-vs-Metal diff of identical dispatches is the second
 gate.
 
-## `gqa_attention_f32` dispatch contract
+## `gqaAttention` dispatch contract
 
 Implements `contracts.AttnArgs` exactly:
 
 - `q` f32 `[n_tokens, n_q_heads, head_dim]`, post-rope post-qknorm.
-- K/V caches f32 `[n_kv_heads, max_ctx, head_dim]`, separate buffers. Addressing
-  strides by `max_ctx` from the params — **never** by the valid length. Fixture
-  caches happen to be packed (`max_ctx == pos + n_tokens`); real caches are not.
+- K/V caches: specified dtype (f32 or f16 per `AttnArgs.kv_dtype`) `[n_kv_heads, max_ctx, head_dim]`, separate buffers. Addressing strides by `max_ctx` from the params — **never** by the valid length. Fixture caches happen to be packed (`max_ctx == pos + n_tokens`); real caches are not. **When kv_dtype is f16, the kernel loads half-precision cache values into f32 registers before dot products** (standard load-convert pattern).
 - GQA mapping: q head `h` reads kv head `h / (n_q_heads / n_kv_heads)`.
 - Causal: query token `t` (absolute position `pos + t`) attends to cache
   positions `0..pos+t` inclusive.
@@ -25,22 +23,25 @@ Implements `contracts.AttnArgs` exactly:
 
 | index | binding | type | contents |
 |---|---|---|---|
-| 0 | `params` | constant `GqaAttnParams` | 28 bytes, see below |
+| 0 | `params` | constant `GqaAttnParams` | 32 bytes, see below |
 | 1 | `q` | `const device float*` | f32 `[n_tokens, n_q_heads, head_dim]` |
-| 2 | `k_cache` | `const device float*` | f32 `[n_kv_heads, max_ctx, head_dim]` |
-| 3 | `v_cache` | `const device float*` | f32 `[n_kv_heads, max_ctx, head_dim]` |
+| 2 | `k_cache` | `const device float*` or `const device half*` | kv_dtype: f32 or f16 `[n_kv_heads, max_ctx, head_dim]` |
+| 3 | `v_cache` | `const device float*` or `const device half*` | kv_dtype: f32 or f16 `[n_kv_heads, max_ctx, head_dim]` |
 | 4 | `out` | `device float*` | f32 `[n_tokens, n_q_heads · head_dim]` |
+
+**Dispatch note:** The kernel's buffer-type selection (how it interprets bindings 2 and 3) is determined by `kv_dtype` in the params. Glue provides the matching device buffer type for each binding before encoding.
 
 ### Params layout (buffer 0)
 
 ```c
-struct GqaAttnParams {     // six uint32 then one float, 28 bytes total
+struct GqaAttnParams {     // seven uint32 then one float, 32 bytes total
     uint  n_q_heads;       // AttnArgs.n_q_heads
     uint  n_kv_heads;      // AttnArgs.n_kv_heads
     uint  head_dim;        // AttnArgs.head_dim
     uint  pos;             // AttnArgs.pos    (tokens already in cache)
     uint  n_tokens;        // AttnArgs.n_tokens
     uint  max_ctx;         // AttnArgs.max_ctx (cache stride, NOT valid length)
+    uint  kv_dtype;        // AttnArgs.kv_dtype (Dtype enum: 0=f32, 1=f16, etc.)
     float scale;           // AttnArgs.scale  (multiplies scores pre-softmax)
 };
 ```
@@ -73,8 +74,9 @@ scalar. Keep any position attribute you add `uint3`.
   real models are exactly 128, synthetic 64 — raise the constant only with a
   matching doc edit).
 - `n_q_heads % n_kv_heads == 0`; `pos + n_tokens <= max_ctx`; all counts non-zero.
+- `kv_dtype` must be f32 (0) or f16 (1); reject others with `UnsupportedDtype`.
 - Buffer lengths: `q`/`out` at least `n_tokens·n_q_heads·head_dim·4` bytes,
-  each cache at least `n_kv_heads·max_ctx·head_dim·4` bytes.
+  each cache at least `n_kv_heads·max_ctx·head_dim·(4 if kv_dtype==f32 else 2)` bytes.
 
 The CPU reference performs the same checks; keeping them glue-side for Metal
 preserves identical error behavior across backends.
@@ -123,13 +125,8 @@ scratch — ~5.1 KiB total.
 
 ### Validation
 
-Fixtures: `tests/fixtures/synthetic/manifest.json`, the six `op == "attention"`
-cases — `l0/l2/l3_attn_prefill` (`pos = 0`, `n_tokens = 17`) and
-`l0/l2/l3_attn_decode` (`pos = 16`, `n_tokens = 1`), all with `n_q_heads = 4`,
-`n_kv_heads = 2`, `head_dim = 64`, `max_ctx = 17`, `scale = 0.125`, tolerance
-atol 1e-4 / rtol 1e-3. Tensor roles: `q`, `k_cache`, `v_cache` (inputs),
-`output` (oracle). The CPU-side fixture test in `kernels_b.zig` is the
-template. Because fixture caches are packed, they cannot catch a kernel that
-wrongly strides by valid length — additionally run the CPU reference's "ragged
-pos" scenario (cache with `max_ctx >` valid length, NaN tail) as a CPU-vs-Metal
-diff before calling the port done.
+Fixtures: `tests/fixtures/synthetic/manifest.json`, the attention cases —
+- Base cases (kv_dtype f32): `l0/l2/l3_attn_prefill` (`pos = 0`, `n_tokens = 17`) and `l0/l2/l3_attn_decode` (`pos = 16`, `n_tokens = 1`), all with `n_q_heads = 4`, `n_kv_heads = 2`, `head_dim = 64`, `max_ctx = 17`, `scale = 0.125`, tolerance atol 1e-4 / rtol 1e-3.
+- f16 KV cache variants: same cases with f16 k_cache/v_cache (fixtures regenerated with f16 tensors, tolerance unchanged).
+
+Tensor roles: `q`, `k_cache`, `v_cache` (inputs), `output` (oracle). The CPU-side fixture test in `kernels_b.zig` is the template. Because fixture caches are packed, they cannot catch a kernel that wrongly strides by valid length — additionally run the CPU reference's "ragged pos" scenario (cache with `max_ctx >` valid length, NaN tail) as a CPU-vs-Metal diff before calling the port done. Test both f32 and f16 variants to verify dtype dispatch logic.

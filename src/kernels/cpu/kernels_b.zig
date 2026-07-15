@@ -37,17 +37,21 @@ pub fn gqaAttention(ctx: *CpuCtx, args: contracts.AttnArgs) KernelError!void {
     if (hq == 0 or hkv == 0 or hd == 0) return KernelError.ShapeMismatch;
     if (hq % hkv != 0) return KernelError.ShapeMismatch;
     if (pos + n_tokens > max_ctx) return KernelError.ShapeMismatch;
+
     const q_bytes = n_tokens * hq * hd * @sizeOf(f32);
     if (args.q.len < q_bytes or args.out.len < q_bytes) return KernelError.ShapeMismatch;
-    const cache_bytes = hkv * max_ctx * hd * @sizeOf(f32);
+
+    const cache_bytes = if (args.kv_dtype == .f32)
+        hkv * max_ctx * hd * @sizeOf(f32)
+    else if (args.kv_dtype == .f16)
+        hkv * max_ctx * hd * @sizeOf(f16)
+    else
+        return KernelError.UnsupportedDtype;
     if (args.k_cache.len < cache_bytes or args.v_cache.len < cache_bytes)
         return KernelError.ShapeMismatch;
 
-    const group = hq / hkv; // q heads per kv head
-
+    const group = hq / hkv;
     const q = cpu.asConstF32(args.q);
-    const k = cpu.asConstF32(args.k_cache);
-    const v = cpu.asConstF32(args.v_cache);
     const out = cpu.asF32(args.out);
 
     // Longest score row is the last query token's: pos + n_tokens positions.
@@ -55,37 +59,74 @@ pub fn gqaAttention(ctx: *CpuCtx, args: contracts.AttnArgs) KernelError!void {
     defer ctx.alloc.free(scores);
 
     for (0..n_tokens) |t| {
-        const ctx_len = pos + t + 1; // positions 0..pos+t inclusive
+        const ctx_len = pos + t + 1;
         for (0..hq) |h| {
             const kh = h / group;
             const qr = q[(t * hq + h) * hd ..][0..hd];
-            const k_head = k[kh * max_ctx * hd ..]; // stride by max_ctx, never packed
-            const v_head = v[kh * max_ctx * hd ..];
 
-            // scores[p] = scale · (q · k[p]), f32, tracking the row max.
-            var row_max: f32 = -std.math.inf(f32);
-            for (0..ctx_len) |p| {
-                var acc: f32 = 0;
-                for (qr, k_head[p * hd ..][0..hd]) |a, b| acc += a * b;
-                const s = acc * args.scale;
-                scores[p] = s;
-                row_max = @max(row_max, s);
-            }
+            // Compute scores and attention based on cache dtype.
+            if (args.kv_dtype == .f32) {
+                const k = cpu.asConstF32(args.k_cache);
+                const v = cpu.asConstF32(args.v_cache);
+                const k_head = k[kh * max_ctx * hd ..];
+                const v_head = v[kh * max_ctx * hd ..];
 
-            // Numerically stable softmax in f32.
-            var sum: f32 = 0;
-            for (scores[0..ctx_len]) |*s| {
-                s.* = @exp(s.* - row_max);
-                sum += s.*;
-            }
-            const inv_sum = 1.0 / sum;
+                var row_max: f32 = -std.math.inf(f32);
+                for (0..ctx_len) |p| {
+                    var acc: f32 = 0;
+                    for (qr, k_head[p * hd ..][0..hd]) |a, b| acc += a * b;
+                    const s = acc * args.scale;
+                    scores[p] = s;
+                    row_max = @max(row_max, s);
+                }
 
-            // out[t, h*hd..] = Σ_p softmax(p) · v[p]
-            const out_row = out[t * hq * hd + h * hd ..][0..hd];
-            @memset(out_row, 0);
-            for (0..ctx_len) |p| {
-                const w = scores[p] * inv_sum;
-                for (out_row, v_head[p * hd ..][0..hd]) |*o, vv| o.* += w * vv;
+                var sum: f32 = 0;
+                for (scores[0..ctx_len]) |*s| {
+                    s.* = @exp(s.* - row_max);
+                    sum += s.*;
+                }
+                const inv_sum = 1.0 / sum;
+
+                const out_row = out[t * hq * hd + h * hd ..][0..hd];
+                @memset(out_row, 0);
+                for (0..ctx_len) |p| {
+                    const w = scores[p] * inv_sum;
+                    for (out_row, v_head[p * hd ..][0..hd]) |*o, vv| o.* += w * vv;
+                }
+            } else if (args.kv_dtype == .f16) {
+                const k = cpu.asConstF16(args.k_cache);
+                const v = cpu.asConstF16(args.v_cache);
+                const k_head = k[kh * max_ctx * hd ..];
+                const v_head = v[kh * max_ctx * hd ..];
+
+                var row_max: f32 = -std.math.inf(f32);
+                for (0..ctx_len) |p| {
+                    var acc: f32 = 0;
+                    for (0..hd) |d| {
+                        acc += qr[d] * @as(f32, @floatCast(k_head[p * hd + d]));
+                    }
+                    const s = acc * args.scale;
+                    scores[p] = s;
+                    row_max = @max(row_max, s);
+                }
+
+                var sum: f32 = 0;
+                for (scores[0..ctx_len]) |*s| {
+                    s.* = @exp(s.* - row_max);
+                    sum += s.*;
+                }
+                const inv_sum = 1.0 / sum;
+
+                const out_row = out[t * hq * hd + h * hd ..][0..hd];
+                @memset(out_row, 0);
+                for (0..ctx_len) |p| {
+                    const w = scores[p] * inv_sum;
+                    for (0..hd) |d| {
+                        out_row[d] += w * @as(f32, @floatCast(v_head[p * hd + d]));
+                    }
+                }
+            } else {
+                return KernelError.UnsupportedDtype;
             }
         }
     }
@@ -144,6 +185,7 @@ test "synthetic attention fixtures: prefill + decode, all layers, in tolerance" 
         const pos = jsonU32(params.get("pos").?);
         const n_tokens = jsonU32(params.get("n_tokens").?);
         const max_ctx = jsonU32(params.get("max_ctx").?);
+        const kv_dtype: contracts.Dtype = if (params.get("kv_dtype")) |v| @enumFromInt(jsonU32(v)) else .f32;
         const tol = case.get("tolerance").?.object;
 
         const tensors = case.get("tensors").?.object;
@@ -161,6 +203,7 @@ test "synthetic attention fixtures: prefill + decode, all layers, in tolerance" 
             .q = try ctx.bufferFromBytes(q.data),
             .k_cache = try ctx.bufferFromBytes(k_cache.data),
             .v_cache = try ctx.bufferFromBytes(v_cache.data),
+            .kv_dtype = kv_dtype,
             .out = out_buf,
             .pos = pos,
             .n_tokens = n_tokens,
@@ -217,6 +260,7 @@ test "single token at pos=0: output is v[kv_head, 0]; NaN tail proves masking" {
         .q = try ctx.bufferFromBytes(std.mem.sliceAsBytes(&q)),
         .k_cache = try ctx.bufferFromBytes(std.mem.sliceAsBytes(&k)),
         .v_cache = try ctx.bufferFromBytes(std.mem.sliceAsBytes(&v)),
+        .kv_dtype = .f32,
         .out = out,
         .pos = 0,
         .n_tokens = 1,
@@ -280,6 +324,7 @@ test "ragged pos mid-sequence: max_ctx stride, causality, packed equivalence" {
         .q = try ctx.bufferFromBytes(std.mem.sliceAsBytes(&q)),
         .k_cache = undefined,
         .v_cache = undefined,
+        .kv_dtype = .f32,
         .out = undefined,
         .pos = pos,
         .n_tokens = n_tokens,
@@ -354,6 +399,7 @@ test "MHA degenerate (n_q_heads == n_kv_heads): hand-computed softmax mixture" {
         .q = try ctx.bufferFromBytes(std.mem.sliceAsBytes(&q)),
         .k_cache = try ctx.bufferFromBytes(std.mem.sliceAsBytes(&k)),
         .v_cache = try ctx.bufferFromBytes(std.mem.sliceAsBytes(&v)),
+        .kv_dtype = .f32,
         .out = out,
         .pos = 1,
         .n_tokens = 1,
@@ -392,6 +438,7 @@ test "softmax stability: huge score magnitudes stay finite (rowmax subtraction)"
         .q = try ctx.bufferFromBytes(std.mem.sliceAsBytes(&q)),
         .k_cache = try ctx.bufferFromBytes(std.mem.sliceAsBytes(&k)),
         .v_cache = try ctx.bufferFromBytes(std.mem.sliceAsBytes(&v)),
+        .kv_dtype = .f32,
         .out = out,
         .pos = 1,
         .n_tokens = 1,
@@ -417,6 +464,7 @@ test "shape violations are rejected" {
         .q = buf,
         .k_cache = buf,
         .v_cache = buf,
+        .kv_dtype = .f32,
         .out = buf,
         .pos = 0,
         .n_tokens = 1,

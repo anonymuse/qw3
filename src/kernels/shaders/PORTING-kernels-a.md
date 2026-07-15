@@ -93,28 +93,34 @@ reductions per row, threadgroup x-tiling to reuse activations, `char4`/`float4`
 vector loads. Any rework re-runs the matmul_quant fixtures (atol 5e-4 / rtol 2e-3),
 which absorb dot-product reassociation.
 
-## kv_append_f32
+## kvAppend (kv_dtype dispatch)
 
 Scatter this step's K and V `[n_tokens, n_kv_heads, head_dim]` into the frozen
 per-layer cache layout `[n_kv_heads, max_ctx, head_dim]` at positions
 `pos..pos+n_tokens-1`. Glue asserts `pos + n_tokens <= max_ctx` before encoding
 (the CPU reference returns ShapeMismatch; the shader has no error channel).
 
+**Dispatch by `KvAppendArgs.kv_dtype`:** The kernel reads this field at runtime and
+selects the cache write path (f32 or f16). Both paths accept the same k_new/v_new (f32
+input), but write cache buffers in the specified dtype. Glue provides the appropriate
+Metal device buffer type to each binding based on kv_dtype before encoding.
+
 | index | binding | type | contents |
 |---|---|---|---|
-| 0 | `params` | constant `KvAppendParams` | 20 B: `uint n_tokens, n_kv_heads, head_dim, pos, max_ctx` |
+| 0 | `params` | constant `KvAppendParams` | 24 B: `uint n_tokens, n_kv_heads, head_dim, pos, max_ctx, uint kv_dtype` |
 | 1 | `k_new` | `const device float*` | f32 `[n_tokens, n_kv_heads, head_dim]` |
 | 2 | `v_new` | `const device float*` | f32 `[n_tokens, n_kv_heads, head_dim]` |
-| 3 | `k_cache` | `device float*` | f32 `[n_kv_heads, max_ctx, head_dim]` |
-| 4 | `v_cache` | `device float*` | f32 `[n_kv_heads, max_ctx, head_dim]` |
+| 3 | `k_cache` | `device float*` or `device half*` | kv_dtype: f32 or f16 `[n_kv_heads, max_ctx, head_dim]` |
+| 4 | `v_cache` | `device float*` or `device half*` | kv_dtype: f32 or f16 `[n_kv_heads, max_ctx, head_dim]` |
 
 ```
 dispatchThreads: grid = (head_dim, n_kv_heads, n_tokens)
 threadsPerThreadgroup = (64, 1, 1)
 ```
 
-Pure elementwise copy to disjoint destinations; no synchronization, bit-exact vs.
-CPU (validate with exact compare, atol 0).
+Pure elementwise copy to disjoint destinations; no synchronization. When kv_dtype is
+f16, kernels convert f32 input to f16 before write (standard precision loss); bit-exact
+vs. CPU reference for matching dtype (validate with exact compare, atol 0).
 
 ## add_f32
 

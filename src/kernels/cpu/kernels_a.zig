@@ -174,15 +174,20 @@ pub fn kvAppend(ctx: *CpuCtx, args: contracts.KvAppendArgs) KernelError!void {
     const max_ctx: usize = args.max_ctx;
     if (head_dim == 0 or n_kv_heads == 0) return KernelError.ShapeMismatch;
     if (args.pos + args.n_tokens > args.max_ctx) return KernelError.ShapeMismatch;
+
     const new_bytes = n_tokens * n_kv_heads * head_dim * @sizeOf(f32);
-    const cache_bytes = n_kv_heads * max_ctx * head_dim * @sizeOf(f32);
     if (args.k_new.len < new_bytes or args.v_new.len < new_bytes) return KernelError.ShapeMismatch;
+
+    const cache_bytes = if (args.kv_dtype == .f32)
+        n_kv_heads * max_ctx * head_dim * @sizeOf(f32)
+    else if (args.kv_dtype == .f16)
+        n_kv_heads * max_ctx * head_dim * @sizeOf(f16)
+    else
+        return KernelError.UnsupportedDtype;
     if (args.k_cache.len < cache_bytes or args.v_cache.len < cache_bytes) return KernelError.ShapeMismatch;
 
     const k_new = cpu.asConstF32(args.k_new);
     const v_new = cpu.asConstF32(args.v_new);
-    const k_cache = cpu.asF32(args.k_cache);
-    const v_cache = cpu.asF32(args.v_cache);
 
     var t: usize = 0;
     while (t < n_tokens) : (t += 1) {
@@ -190,8 +195,23 @@ pub fn kvAppend(ctx: *CpuCtx, args: contracts.KvAppendArgs) KernelError!void {
         while (h < n_kv_heads) : (h += 1) {
             const src = (t * n_kv_heads + h) * head_dim;
             const dst = (h * max_ctx + (args.pos + t)) * head_dim;
-            @memcpy(k_cache[dst..][0..head_dim], k_new[src..][0..head_dim]);
-            @memcpy(v_cache[dst..][0..head_dim], v_new[src..][0..head_dim]);
+
+            if (args.kv_dtype == .f32) {
+                const k_cache = cpu.asF32(args.k_cache);
+                const v_cache = cpu.asF32(args.v_cache);
+                @memcpy(k_cache[dst..][0..head_dim], k_new[src..][0..head_dim]);
+                @memcpy(v_cache[dst..][0..head_dim], v_new[src..][0..head_dim]);
+            } else if (args.kv_dtype == .f16) {
+                const k_cache = cpu.asF16(args.k_cache);
+                const v_cache = cpu.asF16(args.v_cache);
+                var d: usize = 0;
+                while (d < head_dim) : (d += 1) {
+                    k_cache[dst + d] = @floatCast(k_new[src + d]);
+                    v_cache[dst + d] = @floatCast(v_new[src + d]);
+                }
+            } else {
+                return KernelError.UnsupportedDtype;
+            }
         }
     }
 }
@@ -633,6 +653,7 @@ test "kvAppend: round-trip scatter, prior cache contents untouched" {
         .v_new = try ctx.bufferFromBytes(std.mem.sliceAsBytes(&v_new)),
         .k_cache = k_cache,
         .v_cache = v_cache,
+        .kv_dtype = .f32,
         .pos = pos,
         .n_tokens = n_tokens,
         .n_kv_heads = n_kv_heads,
@@ -670,6 +691,7 @@ test "kvAppend: overflow past max_ctx is rejected" {
         .v_new = .{},
         .k_cache = .{},
         .v_cache = .{},
+        .kv_dtype = .f32,
         .pos = 7,
         .n_tokens = 2,
         .n_kv_heads = 1,

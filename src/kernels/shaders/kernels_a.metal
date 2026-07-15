@@ -64,12 +64,13 @@ struct MatmulParams {    // 12 bytes
     uint k;              // MatmulArgs.k — row length (multiple of 32 for Q8_0)
 };
 
-struct KvAppendParams {  // 20 bytes
+struct KvAppendParams {  // 24 bytes
     uint n_tokens;       // KvAppendArgs.n_tokens
     uint n_kv_heads;     // KvAppendArgs.n_kv_heads
     uint head_dim;       // KvAppendArgs.head_dim
     uint pos;            // KvAppendArgs.pos (glue asserts pos+n_tokens <= max_ctx)
     uint max_ctx;        // KvAppendArgs.max_ctx
+    uint kv_dtype;       // KvAppendArgs.kv_dtype (0=f32, 1=f16, etc.)
 };
 
 struct AddParams {       // 4 bytes
@@ -277,6 +278,27 @@ kernel void kv_append_f32(
     const ulong dst = (ulong(h) * p.max_ctx + (p.pos + t)) * p.head_dim + d;
     k_cache[dst] = k_new[src];
     v_cache[dst] = v_new[src];
+}
+
+// kvAppend for f16 cache: write f32 inputs as half-precision to cache.
+kernel void kv_append_f16(
+    constant KvAppendParams& p       [[buffer(0)]],
+    const device float*      k_new   [[buffer(1)]], // f32 [n_tokens, n_kv_heads, head_dim]
+    const device float*      v_new   [[buffer(2)]], // f32 [n_tokens, n_kv_heads, head_dim]
+    device half*             k_cache [[buffer(3)]], // f16 [n_kv_heads, max_ctx, head_dim]
+    device half*             v_cache [[buffer(4)]], // f16 [n_kv_heads, max_ctx, head_dim]
+    uint3 gid [[thread_position_in_grid]])
+{
+    const uint d = gid.x;
+    const uint h = gid.y;
+    const uint t = gid.z;
+    if (d >= p.head_dim || h >= p.n_kv_heads || t >= p.n_tokens) {
+        return;
+    }
+    const ulong src = (ulong(t) * p.n_kv_heads + h) * p.head_dim + d;
+    const ulong dst = (ulong(h) * p.max_ctx + (p.pos + t)) * p.head_dim + d;
+    k_cache[dst] = half(k_new[src]);
+    v_cache[dst] = half(v_new[src]);
 }
 
 // ---------------------------------------------------------------------------

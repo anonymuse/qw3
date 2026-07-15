@@ -39,7 +39,7 @@ kernel test loads golden tensors via `src/shared/fixture.zig` so the pass rule
   post-correctness optimization, gated by a fixture re-run.)
 - Expert banks are single 3-D tensors; expert `e` of `ne = {k, n, n_experts}` starts at
   byte offset `e · rowBytes(k) · n`.
-- KV cache per layer: two f16 buffers `[n_kv_heads, max_ctx, head_dim]` (K and V). Attention loads f16 and accumulates in f32.
+- KV cache per layer: two buffers `[n_kv_heads, max_ctx, head_dim]` (K and V), dtype specified by `KvAppendArgs.kv_dtype` and `AttnArgs.kv_dtype` (f32 or f16). Attention loads from cache and accumulates in f32 registers.
 - All wire and file formats are little-endian / native Apple-Silicon layout (A-12).
 
 ## 2. Router semantics (never altered — ADR-001 rule 1)
@@ -200,4 +200,33 @@ fixtures pin the untouched 128-choose-8 path.
 
 ## Amendments
 
-*(none yet)*
+### Amendment 1: KV cache dtype flexibility (2026-07-14)
+
+**Scope:** Add `kv_dtype: Dtype` field to `KvAppendArgs` and `AttnArgs` to support both f32 and f16 KV cache.
+
+**Rationale:** ADR-005 initially froze KV cache at f32. On 2026-07-12, a bandwidth analysis identified f16 as essential for M3 distributed decode at 32K context (halves inter-node KV streams from ~100 GiB/s to ~50 GiB/s on 235B, reducing per-node KV memory from 3 GiB to 1.5 GiB at 32K/24-layer split). Rather than fixing a single dtype, exposing `kv_dtype` as a dispatch parameter allows:
+- Gradual migration (old code can stay f32, new optimizations choose f16)
+- Comparative testing (same kernel binaries on both dtypes under fixtures)
+- Forward compatibility (future dtypes like bfloat16 are trivial additions)
+
+**Changes:**
+- `contracts.zig`: Add `kv_dtype: Dtype` field to both structs; update doc comments
+- `KvAppendArgs.k_cache` and `.v_cache` are now `kv_dtype` (not f32)
+- `AttnArgs.k_cache` and `.v_cache` are now `kv_dtype` (not f32)
+- Attention implementations load `kv_dtype` into f32 registers per the standard pattern
+- All PORTING-kernels-*.md documents update to reflect dtype dispatch in their contracts
+- CPU reference kernels (kernels_a.zig, kernels_b.zig) and Metal shaders (kernels_a.metal, kernels_b.metal) dispatch on `kv_dtype` to read f32 or f16 cache buffers respectively
+- Fixture regeneration: synthetic model fixtures regenerated with f32 and f16 KV variants for comparative testing
+
+**Kernel dispatch pattern (example):**
+```glsl
+// Metal kernel (kernels_a.metal)
+if (args.kv_dtype == 1) { // Dtype.f16
+    half cache_val = cache_f16[...];
+    float computed = float(cache_val); // load f16 → f32
+} else { // Dtype.f32
+    float computed = cache_f32[...];
+}
+```
+
+**Fixture impact:** Manifest schema unchanged; each test case specifies its `kv_dtype` in the case object under `params`. Default test suite uses f32 (backward compatible); new f16 test cases are opt-in until performance requires them.

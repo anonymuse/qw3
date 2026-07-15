@@ -71,7 +71,7 @@ build, and the SSH toggle is a one-click GUI fallback (Sharing → Remote Login)
 
 ### Phase 1 — hand off to the agents
 
-Open a **new chat** on the primary node (Node A) and paste
+Open a **new chat** on the primary node (Node A: the M5 Pro) and paste
 [`NEW-CHAT-PROMPT.md`](NEW-CHAT-PROMPT.md), followed by the three NODE FACTS blocks.
 From there the orchestrator will:
 

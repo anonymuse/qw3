@@ -48,10 +48,10 @@ installed + logged in, Remote Login/SSH enabled, an ed25519 key generated on eac
    `caffeinate -s` or nohup so a sleep doesn't kill it, and poll for completion.
    Verify the downloaded files exist and are non-truncated (sha256 or size check).
 
-5. **Cluster verification.** On all three nodes: `git clone` the qw3 repo (ask the
-   human for the clone URL/credentials if not already present), `zig build test`,
-   and confirm it passes. Confirm each node can reach the others on the LAN. Write
-   this up as an idempotent `tools/cluster/verify-cluster.sh`.
+5. **Cluster verification.** On all three nodes: the qw3 repo is already cloned to
+   `~/qw3` by bootstrap.sh — just run `zig build test` there and confirm it passes.
+   If `~/qw3` is somehow absent, fall back to cloning manually. Confirm each node can
+   reach the others on the LAN. Write this up as an idempotent `tools/cluster/verify-cluster.sh`.
 
 6. **Deliverables.** Commit to the qw3 repo under `tools/cluster/`:
    `setup-ssh-mesh.sh`, `verify-cluster.sh`, and a `topology.md` recording each

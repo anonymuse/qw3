@@ -166,6 +166,18 @@ if [ "$IS_DOWNLOAD" = "1" ]; then
   mkdir -p "$HOME/ds5-models"
 fi
 
+# 7b. Clone the DS5 repository ----------------------------------------------
+REPO_DIR="${DS5_REPO_DIR:-$HOME/qw3}"
+REPO_URL="https://github.com/anonymuse/qw3.git"
+if [ -d "$REPO_DIR/.git" ]; then
+  say "Updating existing DS5 repo at $REPO_DIR…"
+  git -C "$REPO_DIR" pull --ff-only || warn "git pull failed; leaving existing checkout as-is"
+else
+  say "Cloning DS5 repo to $REPO_DIR…"
+  git clone "$REPO_URL" "$REPO_DIR" || warn "git clone failed — clone it manually: git clone $REPO_URL $REPO_DIR"
+fi
+[ -d "$REPO_DIR/.git" ] && ok "Repo ready at $REPO_DIR"
+
 # 8. Node facts for the orchestrator ----------------------------------------
 LOCALHOST="$(scutil --get LocalHostName 2>/dev/null || hostname)"
 LANIP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo unknown)"
@@ -178,6 +190,7 @@ cat <<EOF
   user:        $USER
   zig:         $ZIG_HAVE
   claude:      $(command -v claude >/dev/null 2>&1 && echo installed || echo MISSING)
+  repo:        ${REPO_DIR:-$HOME/qw3} $([ -d "${REPO_DIR:-$HOME/qw3}/.git" ] && echo "(ready)" || echo "(MISSING)")
   ssh_pubkey:  $(cat "$HOME/.ssh/id_ed25519.pub")
 EOF
 

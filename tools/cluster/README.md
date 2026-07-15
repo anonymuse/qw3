@@ -45,8 +45,8 @@ Everything else is scripted or agent-driven.
    ```sh
    curl -fsSL https://raw.githubusercontent.com/anonymuse/qw3/main/tools/cluster/bootstrap.sh -o bootstrap.sh
    ```
-   (Or AirDrop it from another Mac.) You'll `git clone` the full repo *after*
-   bootstrap runs, once git exists.
+   (Or AirDrop it from another Mac.) `bootstrap.sh` clones the full repo for you
+   to `~/qw3` once git is available — no manual clone needed.
 2. Give each machine a clear name so nodes are distinguishable, e.g.:
    ```sh
    sudo scutil --set LocalHostName ds5-pro     # or ds5-max-1 / ds5-max-2
@@ -73,6 +73,7 @@ build, and the SSH toggle is a one-click GUI fallback (Sharing → Remote Login)
 
 Open a **new chat** on the primary node (Node A: the M5 Pro) and paste
 [`NEW-CHAT-PROMPT.md`](NEW-CHAT-PROMPT.md), followed by the three NODE FACTS blocks.
+The repo is already at `~/qw3` from bootstrap — just `cd ~/qw3 && claude` to open the agent.
 From there the orchestrator will:
 
 1. Establish the coordination primitive (Remote Control peer messaging if

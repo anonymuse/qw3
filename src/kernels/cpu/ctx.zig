@@ -97,6 +97,16 @@ pub fn asConstI32(buf: Buf) []const i32 {
     return @alignCast(std.mem.bytesAsSlice(i32, constBytes(buf, 0, buf.len)));
 }
 
+pub fn asF16(buf: Buf) []f16 {
+    std.debug.assert(buf.len % 2 == 0);
+    return @alignCast(std.mem.bytesAsSlice(f16, mutBytes(buf, 0, buf.len)));
+}
+
+pub fn asConstF16(buf: Buf) []const f16 {
+    std.debug.assert(buf.len % 2 == 0);
+    return @alignCast(std.mem.bytesAsSlice(f16, constBytes(buf, 0, buf.len)));
+}
+
 test "cpu ctx satisfies the frozen gpu api" {
     comptime contracts.assertGpuApi(CpuCtx);
     const ctx = try CpuCtx.init(std.testing.allocator);

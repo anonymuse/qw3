@@ -14,7 +14,7 @@ this file may appear in a public claim.
 | A-06 | Per-node static cap 33.6GB (70% of 48GB) leaves enough runtime reserve for KV at 32K (~3.2GB/worker at FP16) | v0.2 pack | Planning value; verify under real Metal heap behavior |
 | A-07 | Community GGUF artifacts (unsloth et al.) faithfully preserve Qwen3 router/gate tensors at high precision | ADR-002 reuse decision | Verify tensor-by-tensor at M2 GGUF parse |
 | A-08 | macOS `F_NOCACHE`/`F_RDAHEAD` suffice for NVMe promotion I/O control (no `O_DIRECT` on Darwin) | Platform knowledge | Unmeasured (risk R-009); measure before M4 |
-| A-09 | Metal command-buffer dispatch overhead is small enough for per-layer kernel launches at 94 layers/token | v0.2 risk R-007 | Unmeasured; microbench before M2 kernel design freeze |
+| A-09 | Metal command-buffer dispatch overhead is small enough for per-layer kernel launches at 94 layers/token | v0.2 risk R-007 | Measured 2026-07-11 (W2, M5 Air): ~380–590 µs per synchronous one-dispatch command buffer → per-layer sync buffers would cost ~40 ms/token at 94 layers. Kernels MUST batch many dispatches per command buffer; glue `begin()`/`submit()` supports this. Re-verify on M5 Max. |
 | A-10 | Toolchain: Zig 0.16.0 (docs said "Zig 1.0", which does not exist); macOS on all nodes; Python 3.14 for tooling | This repo | Fact, re-verify on cluster nodes |
 | A-11 | Dev machine (Apple M5, 24GB) is not a cluster node; loopback numbers from it are *not* mesh numbers | ADR-004 | Fact |
 | A-12 | All cluster nodes are aarch64 little-endian; wire formats assume native byte order | Protocol design | Fact for Apple Silicon; revisit only if a foreign node ever joins the data plane (ADR-004 forbids it) |

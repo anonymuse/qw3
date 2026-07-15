@@ -250,13 +250,15 @@ pub const MatmulArgs = struct {
 };
 
 /// Copy this step's rotated K and V into the cache at position `pos`.
-/// Frozen KV cache layout: f32 [n_kv_heads, max_ctx, head_dim], K and V in
-/// separate buffers, one pair per layer.
+/// Frozen KV cache layout: [n_kv_heads, max_ctx, head_dim] (kv_dtype), K and V in
+/// separate buffers, one pair per layer. kv_dtype specifies the cache element dtype
+/// (f32 or f16); attention will load these into f32 registers for computation.
 pub const KvAppendArgs = struct {
     k_new: Buf, // f32 [n_tokens, n_kv_heads, head_dim]
     v_new: Buf, // f32 [n_tokens, n_kv_heads, head_dim]
-    k_cache: Buf,
-    v_cache: Buf,
+    k_cache: Buf, // kv_dtype
+    v_cache: Buf, // kv_dtype
+    kv_dtype: Dtype,
     pos: u32, // tokens already in cache
     n_tokens: u32,
     n_kv_heads: u32,
@@ -266,11 +268,13 @@ pub const KvAppendArgs = struct {
 
 /// Causal GQA attention over the cache. Query tokens occupy absolute positions
 /// pos..pos+n_tokens-1; token t attends to cache positions 0..pos+t inclusive.
-/// Softmax in f32.
+/// Softmax in f32. K/V cache element dtype specified by kv_dtype (f32 or f16);
+/// attention loads these into f32 registers for computation.
 pub const AttnArgs = struct {
     q: Buf, // f32 [n_tokens, n_q_heads, head_dim], post-rope post-qknorm
-    k_cache: Buf,
-    v_cache: Buf,
+    k_cache: Buf, // kv_dtype
+    v_cache: Buf, // kv_dtype
+    kv_dtype: Dtype,
     out: Buf, // f32 [n_tokens, n_q_heads * head_dim]
     pos: u32,
     n_tokens: u32,
@@ -558,4 +562,6 @@ test "frozen interfaces are implementable" {
     const ctx = try MockCtx.init(std.testing.allocator);
     defer std.testing.allocator.destroy(ctx);
     try mock_kernels.add(ctx, .{ .x = .{}, .y = .{}, .out = .{}, .n_elems = 0 });
+    try mock_kernels.kvAppend(ctx, .{ .k_new = .{}, .v_new = .{}, .k_cache = .{}, .v_cache = .{}, .kv_dtype = .f32, .pos = 0, .n_tokens = 0, .n_kv_heads = 0, .head_dim = 0, .max_ctx = 0 });
+    try mock_kernels.gqaAttention(ctx, .{ .q = .{}, .k_cache = .{}, .v_cache = .{}, .kv_dtype = .f32, .out = .{}, .pos = 0, .n_tokens = 0, .n_q_heads = 0, .n_kv_heads = 0, .head_dim = 0, .max_ctx = 0, .scale = 1.0 });
 }

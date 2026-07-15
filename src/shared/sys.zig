@@ -97,6 +97,37 @@ pub fn writeFileTrunc(alloc: std.mem.Allocator, path: []const u8, bytes: []const
     try writeAllFd(fd, bytes);
 }
 
+pub const MmapError = std.mem.Allocator.Error || error{ OpenFailed, MmapFailed };
+
+/// A whole file mapped read-only. The base address is page-aligned, so slices
+/// into the map can later be wrapped by Metal's newBufferWithBytesNoCopy.
+pub const MappedFile = struct {
+    data: []align(std.heap.page_size_min) const u8,
+
+    pub fn unmap(self: *MappedFile) void {
+        _ = c.munmap(@constCast(self.data.ptr), self.data.len);
+        self.* = undefined;
+    }
+};
+
+/// mmap an entire file read-only (private mapping). Zero-copy data path for
+/// GGUF weights; empty files cannot be mapped and return MmapFailed.
+pub fn mmapFileRead(alloc: std.mem.Allocator, path: []const u8) MmapError!MappedFile {
+    const pathz = try alloc.dupeZ(u8, path);
+    defer alloc.free(pathz);
+    const fd = c.open(pathz, .{ .ACCMODE = .RDONLY });
+    if (fd < 0) return error.OpenFailed;
+    defer closeFd(fd);
+    var st: c.Stat = undefined;
+    if (c.fstat(fd, &st) != 0) return error.OpenFailed;
+    if (st.size <= 0) return error.MmapFailed;
+    const len: usize = @intCast(st.size);
+    const ptr = c.mmap(null, len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, fd, 0);
+    if (ptr == std.c.MAP_FAILED) return error.MmapFailed;
+    const base: [*]align(std.heap.page_size_min) const u8 = @alignCast(@ptrCast(ptr));
+    return .{ .data = base[0..len] };
+}
+
 /// mkdir -p for relative paths. Existing directories are fine.
 pub fn mkdirPath(alloc: std.mem.Allocator, path: []const u8) !void {
     var i: usize = 0;
@@ -113,6 +144,17 @@ test "monotonic clock advances" {
     const a = monotonicNs();
     const b = monotonicNs();
     try std.testing.expect(b >= a);
+}
+
+test "mmapFileRead maps file contents page-aligned" {
+    const alloc = std.testing.allocator;
+    try mkdirPath(alloc, ".zig-cache/tmp/ds5-sys-test");
+    try writeFileTrunc(alloc, ".zig-cache/tmp/ds5-sys-test/m.bin", "mapped-bytes");
+    var m = try mmapFileRead(alloc, ".zig-cache/tmp/ds5-sys-test/m.bin");
+    defer m.unmap();
+    try std.testing.expectEqualStrings("mapped-bytes", m.data);
+    try std.testing.expectEqual(@as(usize, 0), @intFromPtr(m.data.ptr) % std.heap.page_size_min);
+    try std.testing.expectError(error.OpenFailed, mmapFileRead(alloc, ".zig-cache/tmp/ds5-sys-test/absent.bin"));
 }
 
 test "mkdirPath and file round-trip" {

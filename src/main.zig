@@ -14,6 +14,12 @@ const sys = @import("shared/sys.zig");
 const tcp = @import("transport/tcp.zig");
 const version = @import("shared/version.zig");
 const out = @import("shared/out.zig");
+const gguf = @import("gguf/gguf.zig");
+const forward = @import("engine/forward.zig");
+const cpu = @import("kernels/cpu/ctx.zig");
+const kernels_a = @import("kernels/cpu/kernels_a.zig");
+const kernels_b = @import("kernels/cpu/kernels_b.zig");
+const kernels_c = @import("kernels/cpu/kernels_c.zig");
 
 const usage =
     \\usage:
@@ -21,6 +27,7 @@ const usage =
     \\  ds5 bench link --cluster PATH [--self NAME] [--out DIR] [--label S]
     \\                 [--sustained-secs N] [--quick]
     \\  ds5 health --host HOST [--port PORT]
+    \\  ds5 run --model PATH --prompt-tokens "1,2,3" [--steps N] [--greedy]
     \\  ds5 version
     \\
 ;
@@ -94,6 +101,32 @@ pub fn main(init: std.process.Init) !void {
             return error.MissingArgument;
         };
         try healthCheck(alloc, h, port);
+    } else if (std.mem.eql(u8, cmd, "run")) {
+        var model_path: ?[]const u8 = null;
+        var prompt_str: ?[]const u8 = null;
+        var n_steps: u32 = 8;
+        var greedy = false;
+        var i: usize = 2;
+        while (i < args.len) : (i += 1) {
+            if (std.mem.eql(u8, args[i], "--model")) {
+                model_path = try requireValue(args, &i);
+            } else if (std.mem.eql(u8, args[i], "--prompt-tokens")) {
+                prompt_str = try requireValue(args, &i);
+            } else if (std.mem.eql(u8, args[i], "--steps")) {
+                n_steps = try std.fmt.parseInt(u32, try requireValue(args, &i), 10);
+            } else if (std.mem.eql(u8, args[i], "--greedy")) {
+                greedy = true;
+            } else return badArg(args[i]);
+        }
+        const model_file = model_path orelse {
+            out.print("run requires --model PATH\n", .{});
+            return error.MissingArgument;
+        };
+        const prompt_csv = prompt_str orelse {
+            out.print("run requires --prompt-tokens CSV\n", .{});
+            return error.MissingArgument;
+        };
+        try runForward(alloc, model_file, prompt_csv, n_steps, greedy);
     } else {
         out.print("{s}", .{usage});
         return error.UnknownCommand;
@@ -124,6 +157,101 @@ fn badArg(arg: []const u8) anyerror {
     return error.UnknownArgument;
 }
 
+fn runForward(alloc: std.mem.Allocator, model_path: []const u8, prompt_csv: []const u8, n_steps: u32, greedy: bool) !void {
+    // Parse prompt tokens from CSV string: first count, then allocate, then fill.
+    var n_toks: usize = 0;
+    var it = std.mem.splitSequence(u8, prompt_csv, ",");
+    while (it.next()) |tok_str| {
+        if (std.mem.trim(u8, tok_str, " \t").len > 0) n_toks += 1;
+    }
+    if (n_toks == 0) {
+        out.print("prompt-tokens cannot be empty\n", .{});
+        return;
+    }
+
+    const prompt = try alloc.alloc(u32, n_toks);
+    defer alloc.free(prompt);
+    var idx: usize = 0;
+    it = std.mem.splitSequence(u8, prompt_csv, ",");
+    while (it.next()) |tok_str| {
+        const trimmed = std.mem.trim(u8, tok_str, " \t");
+        if (trimmed.len > 0) {
+            prompt[idx] = try std.fmt.parseInt(u32, trimmed, 10);
+            idx += 1;
+        }
+    }
+
+    // Load the model.
+    var model = gguf.Model.open(alloc, model_path) catch |err| {
+        out.print("failed to open {s}: {}\n", .{ model_path, err });
+        return err;
+    };
+    defer model.deinit();
+
+    // Create context and weights.
+    const ctx = try cpu.CpuCtx.init(alloc);
+    defer ctx.deinit();
+    var weights = try forward.Weights.fromGguf(alloc, ctx, &model);
+    defer weights.deinit();
+
+    // Merged kernel provider.
+    const cpu_kernels = struct {
+        pub const rmsNorm = kernels_a.rmsNorm;
+        pub const rope = kernels_a.rope;
+        pub const matmul = kernels_a.matmul;
+        pub const kvAppend = kernels_a.kvAppend;
+        pub const add = kernels_a.add;
+        pub const gqaAttention = kernels_b.gqaAttention;
+        pub const routerTopK = kernels_c.routerTopK;
+        pub const expertMlpSwiglu = kernels_c.expertMlpSwiglu;
+    };
+
+    const CpuEngine = forward.Engine(cpu.CpuCtx, cpu_kernels);
+    var engine = try CpuEngine.init(alloc, ctx, &weights, 64);
+    defer engine.deinit();
+
+    // Run prefill.
+    const vocab = weights.config.vocab_size;
+    const max_seq = n_toks + n_steps;
+    var all_logits = try alloc.alloc(f32, @as(u64, max_seq) * vocab);
+    defer alloc.free(all_logits);
+
+    try engine.forward(prompt, all_logits[0 .. @as(u64, n_toks) * vocab]);
+
+    // Greedy decode: build the full sequence.
+    var seq = try alloc.alloc(u32, max_seq);
+    defer alloc.free(seq);
+    @memcpy(seq[0..n_toks], prompt);
+
+    var next = forward.argmax(all_logits[(@as(u64, n_toks) - 1) * vocab .. @as(u64, n_toks) * vocab]);
+    for (0..n_steps) |step| {
+        seq[n_toks + step] = next;
+        const row_start = (@as(u64, n_toks) + step) * vocab;
+        const row_end = row_start + vocab;
+        try engine.forward(&.{next}, all_logits[row_start..row_end]);
+        next = forward.argmax(all_logits[row_start..row_end]);
+    }
+
+    // Print greedy tokens (the ones added during decode).
+    var first = true;
+    for (seq[n_toks .. n_toks + n_steps]) |tok| {
+        if (!first) out.print(" ", .{});
+        out.print("{d}", .{tok});
+        first = false;
+    }
+    out.print("\n", .{});
+
+    if (greedy) {
+        var first_g = true;
+        for (seq[0 .. n_toks + n_steps]) |tok| {
+            if (!first_g) out.print(" ", .{});
+            out.print("{d}", .{tok});
+            first_g = false;
+        }
+        out.print("\n", .{});
+    }
+}
+
 test {
     _ = @import("shared/protocol.zig");
     _ = @import("shared/activation_packet.zig");
@@ -134,5 +262,9 @@ test {
     _ = @import("shared/sysinfo.zig");
     _ = @import("shared/contracts.zig");
     _ = @import("shared/fixture.zig");
+    _ = @import("kernels/cpu/kernels_a.zig");
+    _ = @import("kernels/cpu/kernels_b.zig");
     _ = @import("kernels/cpu/kernels_c.zig");
+    _ = @import("gguf/gguf.zig");
+    _ = @import("test_forward.zig");
 }

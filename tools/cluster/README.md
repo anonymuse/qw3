@@ -51,7 +51,10 @@ Everything else is scripted or agent-driven.
    ```sh
    sudo scutil --set LocalHostName ds5-pro     # or ds5-max-1 / ds5-max-2
    ```
-3. Run the bootstrap for its role:
+3. Run the bootstrap for its role — **as yourself, never with `sudo`.** The script
+   prompts for your password once (to prime sudo) and installs Homebrew as your
+   user; running the whole thing under `sudo` breaks Homebrew, which refuses to
+   install as root.
    ```sh
    caffeinate -s bash bootstrap.sh --role primary               # Node A
    caffeinate -s bash bootstrap.sh --role worker --download     # Node B

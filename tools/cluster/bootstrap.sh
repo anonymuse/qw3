@@ -38,9 +38,21 @@ ok()   { printf '\033[1;32m[ok] %s\033[0m\n' "$*"; }
 
 say "DS5 bootstrap — role=$ROLE download-node=$IS_DOWNLOAD"
 
-# 0. Require an Administrator account ----------------------------------------
-# Homebrew and the SSH/`sudo` steps below fail outright for a Standard user.
-# Fail fast with an actionable message instead of dying at the Homebrew step.
+# 0a. Must NOT run as root ---------------------------------------------------
+# `sudo bash bootstrap.sh` breaks things: Homebrew hard-aborts as root, and the
+# SSH key / Claude Code login must belong to your user, not root.
+if [ "$(id -u)" -eq 0 ]; then
+  warn "Don't run this with sudo/as root."
+  cat <<EOF
+        Homebrew refuses to install as root, and your SSH key + Claude Code login
+        must belong to your user. Re-run as yourself, WITHOUT sudo:
+            bash bootstrap.sh --role $ROLE $([ "$IS_DOWNLOAD" = 1 ] && echo --download)
+        The script prompts for your password once when it actually needs sudo.
+EOF
+  exit 1
+fi
+
+# 0b. Require an Administrator account ---------------------------------------
 if ! id -Gn "$USER" 2>/dev/null | grep -qw admin; then
   warn "User '$USER' is a Standard account, but this setup needs Administrator rights."
   cat <<EOF
@@ -55,13 +67,28 @@ EOF
 fi
 ok "$USER is an Administrator"
 
+# 0c. Prime sudo ONCE, up front ----------------------------------------------
+# The Homebrew installer runs non-interactively (it won't prompt on its own) and
+# the CLT install needs root too. Without a cached sudo credential Homebrew aborts
+# with a misleading "needs to be an Administrator" message even for admins. Prompt
+# for the password here, then keep the timestamp warm through the long installs.
+say "Priming sudo — enter your login password once…"
+if ! sudo -v; then
+  warn "sudo failed. This account must be able to run sudo. Aborting."
+  exit 1
+fi
+( while true; do sudo -n true 2>/dev/null; sleep 50; kill -0 "$$" 2>/dev/null || exit; done ) &
+SUDO_KEEPALIVE=$!
+trap '[ -n "${SUDO_KEEPALIVE:-}" ] && kill "$SUDO_KEEPALIVE" 2>/dev/null' EXIT
+ok "sudo primed"
+
 # 1. Xcode Command Line Tools ------------------------------------------------
 if ! xcode-select -p >/dev/null 2>&1; then
   say "Installing Xcode Command Line Tools (headless)…"
   touch /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress
   PROD=$(softwareupdate -l 2>/dev/null | grep -Eo 'Label: Command Line Tools.*' | sed 's/^Label: //' | tail -1)
   if [ -n "$PROD" ]; then
-    softwareupdate -i "$PROD" --verbose || warn "headless CLT install failed"
+    sudo softwareupdate -i "$PROD" --verbose || warn "headless CLT install failed"
   fi
   rm -f /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress
   if ! xcode-select -p >/dev/null 2>&1; then

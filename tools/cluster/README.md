@@ -19,7 +19,12 @@ is **maximum agentic automation**: humans do only the irreducible per-machine se
 
 Three MacBooks, on the internet, logged in. Plus these irreducible seams:
 
-1. **Admin password** on each (sudo: Homebrew, CLT, SSH toggle).
+1. **An Administrator account** on each — not just a password. The login user must
+   be an admin (Homebrew and the sudo/SSH steps fail for a Standard user). Check
+   with `id -Gn | grep -qw admin`; if missing, from an existing admin run
+   `sudo dseditgroup -o edit -a <user> -t user admin`, then log out/in. On a fresh
+   Mac the first Setup Assistant account is an admin by default. `bootstrap.sh`
+   pre-checks this and stops early with instructions if it's not met.
 2. **Same LAN** — all three on the same network (wired Ethernet preferred; same
    Wi-Fi is fine). Confirm the macOS firewall isn't blocking SSH
    (System Settings → Network → Firewall — off, or allow Remote Login).

@@ -38,6 +38,23 @@ ok()   { printf '\033[1;32m[ok] %s\033[0m\n' "$*"; }
 
 say "DS5 bootstrap — role=$ROLE download-node=$IS_DOWNLOAD"
 
+# 0. Require an Administrator account ----------------------------------------
+# Homebrew and the SSH/`sudo` steps below fail outright for a Standard user.
+# Fail fast with an actionable message instead of dying at the Homebrew step.
+if ! id -Gn "$USER" 2>/dev/null | grep -qw admin; then
+  warn "User '$USER' is a Standard account, but this setup needs Administrator rights."
+  cat <<EOF
+        Homebrew and the sudo/SSH steps cannot run without admin. To fix, from an
+        EXISTING administrator account on this Mac:
+            sudo dseditgroup -o edit -a $USER -t user admin
+        or: System Settings -> Users & Groups -> (i) next to $USER ->
+            "Allow this user to administer this computer".
+        Then log '$USER' out and back in, and re-run this script.
+EOF
+  exit 1
+fi
+ok "$USER is an Administrator"
+
 # 1. Xcode Command Line Tools ------------------------------------------------
 if ! xcode-select -p >/dev/null 2>&1; then
   say "Installing Xcode Command Line Tools (headless)…"

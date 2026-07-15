@@ -34,7 +34,14 @@ Everything else is scripted or agent-driven.
 
 ### Phase 0 — per machine (human, ~5 min each)
 
-1. Copy `bootstrap.sh` onto the Mac (AirDrop it, or paste into a new file).
+1. Fetch `bootstrap.sh` onto the Mac. **Do not `git clone` yet** — git isn't on a
+   fresh Mac (it ships with the Command Line Tools that bootstrap installs). But
+   `curl` *is* built in, and the repo is public, so:
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/anonymuse/qw3/main/tools/cluster/bootstrap.sh -o bootstrap.sh
+   ```
+   (Or AirDrop it from another Mac.) You'll `git clone` the full repo *after*
+   bootstrap runs, once git exists.
 2. Give each machine a clear name so nodes are distinguishable, e.g.:
    ```sh
    sudo scutil --set LocalHostName ds5-pro     # or ds5-max-1 / ds5-max-2

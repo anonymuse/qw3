@@ -41,6 +41,19 @@ Recorded by the orchestrator agent after `setup-ssh-mesh.sh` and
   stderr (see `docs/orchestration/HANDOFF.md` landmine #1) — exit code and
   the Build Summary line are the ground truth, not that line.
 
+## Dev / management access
+
+`tools/cluster/enroll-dev-node.sh` grants a personal dev laptop passwordless
+SSH into A, B, and C (one-directional: dev laptop → cluster only; the
+cluster never holds a key back into the dev laptop). This is admin/control
+access for driving cluster scripts remotely — it does **not** make the
+laptop a DS5 compute participant, so it is deliberately absent from
+`manifests/cluster/lab.zon`.
+
+| Machine | Role | Hostname | User | SSH pubkey comment | Enrolled |
+|---|---|---|---|---|---|
+| MacBook Air (M5, 24GB) | `dev` (management only) | `Jesses-MacBook-Air.local` | jessewhite | `ds5-dev-air` | 2026-07-15 — verified passwordless to A/B/C |
+
 ## Coordination primitive used
 
 **Pattern A: SSH from the primary node.** No Claude Code Remote Control /

@@ -110,6 +110,32 @@ From there the orchestrator agent will:
 6. Author the reusable scripts (`setup-ssh-mesh.sh`, `verify-cluster.sh`, etc.)
    and a topology doc as committed deliverables.
 
+### Phase 1b — Enroll a dev/management laptop (optional, any time after Phase 0)
+
+If you want to drive the cluster — SSH in, run `verify-cluster.sh`, kick off
+tasks — from a personal dev laptop that isn't one of the three cluster nodes
+(e.g. Claude Code running locally on your own Mac), enroll it for
+passwordless SSH access:
+
+```sh
+bash tools/cluster/enroll-dev-node.sh
+```
+
+**[MANUAL]** Run this **on the dev laptop itself**. It prompts once per node
+for the cluster login password (Remote Login must already be ON from Phase 0)
+— after that it's idempotent and safe to re-run. **[AUTOMATED]** The script
+generates an ed25519 SSH key on the dev laptop if one doesn't exist yet,
+pushes its public key into `authorized_keys` on A, B, and C via
+`ssh-copy-id`, and verifies passwordless SSH from the dev laptop to all
+three.
+
+This is **one-directional** (dev laptop → cluster only) — the cluster nodes
+are never given a key back into the dev laptop. It's SSH/admin access, not
+compute participation: the dev laptop is never added to
+`manifests/cluster/lab.zon` (the TB5 inference mesh). If a cluster's nodes
+use a different login username than the dev laptop, set
+`DS5_CLUSTER_USER=<user>` before running.
+
 ### Phase 2 — GitHub Authentication Setup
 
 After the cluster is fully operational, set up secure GitHub authentication on all nodes:
@@ -165,6 +191,7 @@ After the cluster is fully operational, set up secure GitHub authentication on a
 **Phase 0 & 1** (Agent-generated):
 - `tools/cluster/bootstrap.sh` — per-node bootstrap.
 - `tools/cluster/setup-ssh-mesh.sh` — key distribution (SSH mesh).
+- `tools/cluster/enroll-dev-node.sh` — one-way SSH enrollment for a dev/management laptop (not a compute node).
 - `tools/cluster/verify-cluster.sh` — build + reachability verification.
 - `tools/cluster/topology.md` — node map, addresses, Zig versions.
 - `~/Code/ds5-cluster/node-facts-<hostname>.txt` — per-node facts (saved by bootstrap).

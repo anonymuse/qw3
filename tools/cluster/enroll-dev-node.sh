@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# DS5 cluster — enroll THIS machine (a dev/management laptop, not a compute
-# node) with passwordless SSH access into the 3-node cluster, so it can drive
-# cluster scripts (setup-ssh-mesh.sh, verify-cluster.sh, ds5 bench link, etc.)
-# the same way Node A does.
+# DS5 cluster — enroll THIS machine as Node D (the dev/management laptop, not
+# a compute node) with passwordless SSH access into the 3-node compute
+# cluster (A/B/C), so it can drive cluster scripts (setup-ssh-mesh.sh,
+# verify-cluster.sh, ds5 bench link, etc.) the same way Node A does.
 #
-# Run FROM the dev laptop. One-time interactive step per node: each prompts
-# for its login password (Remote Login must already be ON — bootstrap.sh
-# Phase 0 does this on A/B/C). After that it's idempotent and safe to re-run.
+# Run FROM Node D (the dev laptop). One-time interactive step per node: each
+# prompts for its login password (Remote Login must already be ON —
+# bootstrap.sh Phase 0 does this on A/B/C). After that it's idempotent and
+# safe to re-run.
 #
-# This is one-directional (dev laptop -> cluster only) — the cluster nodes
-# are never given a key to reach back into this laptop. The dev laptop is
-# also NOT added to manifests/cluster/lab.zon (the TB5 inference mesh): this
-# is SSH/admin access, not DS5 compute participation.
+# This is one-directional (Node D -> cluster only) — the cluster nodes are
+# never given a key to reach back into Node D. Node D is also NOT added to
+# manifests/cluster/lab.zon (the TB5 inference mesh): this is SSH/admin
+# access, not DS5 compute participation. See tools/cluster/topology.md for
+# the full access model (Pattern A vs. Pattern B coordination).
 
 set -uo pipefail
 
@@ -29,7 +31,7 @@ SSH="ssh -4 -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeo
 
 # 1. Local SSH key ------------------------------------------------------------
 if [ ! -f "$HOME/.ssh/id_ed25519" ]; then
-  say "Generating ed25519 SSH key for this dev machine…"
+  say "Generating ed25519 SSH key for Node D (this dev machine)…"
   mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
   ssh-keygen -t ed25519 -N "" -C "ds5-dev-$(scutil --get LocalHostName 2>/dev/null || hostname)" -f "$HOME/.ssh/id_ed25519" >/dev/null
 fi
@@ -55,7 +57,7 @@ for host in "${NODES[@]}"; do
 done
 
 # 3. Verify passwordless SSH in all 3 directions ------------------------------
-say "Verifying passwordless SSH from this dev machine to all 3 nodes"
+say "Verifying passwordless SSH from Node D (this dev machine) to all 3 nodes"
 FAILS=0
 for i in "${!NODES[@]}"; do
   host="${NODES[$i]}"; label="${LABELS[$i]}"
@@ -68,7 +70,7 @@ for i in "${!NODES[@]}"; do
 done
 
 if [ "$FAILS" -eq 0 ]; then
-  say "Dev node enrolled: passwordless SSH to all 3 cluster nodes confirmed."
+  say "Node D enrolled: passwordless SSH to all 3 cluster nodes confirmed."
   say "You can now run tools/cluster/verify-cluster.sh (or any cluster script) from this machine."
 else
   warn "$FAILS node(s) failed verification. Re-run this script once they're reachable; it's idempotent."

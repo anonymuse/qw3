@@ -1,8 +1,10 @@
-# DS5 3-Node Cluster — Operator Runbook
+# DS5 Cluster — Operator Runbook
 
-Brings up 1× M5 Pro + 2× M5 Max as an agent-coordinated cluster for DS5. The goal
-is **maximum agentic automation**: humans do only the irreducible per-machine seams
-(sudo, GUI toggles, Claude Code login), then AI agents take over.
+Brings up 1× M5 Pro + 2× M5 Max as an agent-coordinated **compute** cluster for
+DS5, plus a 4th machine — the dev/management laptop — enrolled for remote
+control. The goal is **maximum agentic automation**: humans do only the
+irreducible per-machine seams (sudo, GUI toggles, Claude Code login), then AI
+agents take over.
 
 ## Node roles
 
@@ -11,9 +13,15 @@ is **maximum agentic automation**: humans do only the irreducible per-machine se
 | A | M5 Pro | `primary` (orchestrator) | Runs the coordinating Claude Code session |
 | B | M5 Max | `worker` + `--download` | Stores the GGUF models (needs >150 GB free) |
 | C | M5 Max | `worker` | Second compute node |
+| D | Dev laptop (MacBook Air, M5 24GB) | `dev` (management, **non-compute**) | Drives cluster scripts remotely over SSH; never joins the TB5 inference mesh |
 
-> The **download node is an M5 Max**, never the dev MacBook Air (24 GB) — the model
-> set needs >150 GB of disk.
+> The **download node is an M5 Max**, never Node D — the model set needs
+> >150 GB of disk, and Node D is out-of-band from the compute mesh entirely.
+
+A/B/C form the TB5-bridged inference mesh (`manifests/cluster/lab.zon`).
+Node D is where you (and/or a locally-running Claude Code session) drive that
+mesh from day to day — see [`topology.md`](topology.md#node-d-details--access-model)
+for the access model and Phase 1b below for enrollment.
 
 ## What YOU provide (per the plan)
 
@@ -110,31 +118,36 @@ From there the orchestrator agent will:
 6. Author the reusable scripts (`setup-ssh-mesh.sh`, `verify-cluster.sh`, etc.)
    and a topology doc as committed deliverables.
 
-### Phase 1b — Enroll a dev/management laptop (optional, any time after Phase 0)
+### Phase 1b — Enroll Node D (the dev/management laptop)
 
-If you want to drive the cluster — SSH in, run `verify-cluster.sh`, kick off
-tasks — from a personal dev laptop that isn't one of the three cluster nodes
-(e.g. Claude Code running locally on your own Mac), enroll it for
-passwordless SSH access:
+Order-independent — run any time after Phase 0 on A/B/C has enabled Remote
+Login. This is the 4th node in the cluster picture (see "Node roles" above):
+it's what lets you — or a Claude Code session running locally on your own
+Mac — drive the cluster (SSH in, run `verify-cluster.sh`, kick off tasks)
+without needing a terminal open on Node A. A cluster bring-up isn't complete
+until this step has run at least once.
 
 ```sh
 bash tools/cluster/enroll-dev-node.sh
 ```
 
-**[MANUAL]** Run this **on the dev laptop itself**. It prompts once per node
-for the cluster login password (Remote Login must already be ON from Phase 0)
-— after that it's idempotent and safe to re-run. **[AUTOMATED]** The script
-generates an ed25519 SSH key on the dev laptop if one doesn't exist yet,
-pushes its public key into `authorized_keys` on A, B, and C via
-`ssh-copy-id`, and verifies passwordless SSH from the dev laptop to all
-three.
+**[MANUAL]** Run this **on Node D itself** (the dev laptop). It prompts once
+per node for the cluster login password (Remote Login must already be ON
+from Phase 0) — after that it's idempotent and safe to re-run.
+**[AUTOMATED]** The script generates an ed25519 SSH key on Node D if one
+doesn't exist yet, pushes its public key into `authorized_keys` on A, B, and
+C via `ssh-copy-id`, and verifies passwordless SSH from Node D to all three.
 
-This is **one-directional** (dev laptop → cluster only) — the cluster nodes
-are never given a key back into the dev laptop. It's SSH/admin access, not
-compute participation: the dev laptop is never added to
-`manifests/cluster/lab.zon` (the TB5 inference mesh). If a cluster's nodes
-use a different login username than the dev laptop, set
+This is **one-directional** (Node D → cluster only) — the cluster nodes are
+never given a key back into Node D. It's SSH/admin access, not compute
+participation: Node D is never added to `manifests/cluster/lab.zon` (the TB5
+inference mesh) and never needs the Zig toolchain or GGUF models. If a
+cluster's nodes use a different login username than Node D, set
 `DS5_CLUSTER_USER=<user>` before running.
+
+Once enrolled, `tools/cluster/verify-cluster.sh` and any other cluster script
+can be run identically from Node D or Node A (see `topology.md`'s
+"Coordination primitive" section — Pattern A vs. Pattern B).
 
 ### Phase 2 — GitHub Authentication Setup
 

@@ -1,6 +1,10 @@
 // DS5 lab cluster. Hosts are the statically-assigned Thunderbolt-bridge IPs —
 // EDIT THESE to match your bridge configuration before the first mesh run
 // (see docs/runbook.md for assigning them).
+//
+// Only the 3 TB5-bridged compute nodes (A/B/C) belong here. Node D, the
+// dev/management laptop enrolled via tools/cluster/enroll-dev-node.sh, is
+// deliberately never added — see tools/cluster/topology.md.
 .{
     .cluster_name = "ds5-lab",
     .manifest_version = 1,

@@ -5,11 +5,12 @@
 # Run from the PRIMARY node (Node A / pro-1, Pattern A) — or from Node D, the
 # dev/management laptop enrolled via tools/cluster/enroll-dev-node.sh
 # (Pattern B; see topology.md) — after tools/cluster/setup-ssh-mesh.sh has
-# established the passwordless SSH mesh. Node A is always tested over SSH
-# like B/C unless this script is actually running on Node A itself, so the
-# result labeled "Node A" is always Node A's checkout, never the invoking
-# machine's. Idempotent / re-runnable: clones if missing, otherwise
-# fast-forward pulls.
+# established the passwordless SSH mesh. Node A and Node C are always tested
+# over SSH like the other nodes unless this script is actually running on
+# that node itself, so the result labeled "Node A"/"Node C" is always that
+# node's checkout, never the invoking machine's (neither node is given
+# passwordless SSH to itself — see setup-ssh-mesh.sh). Idempotent /
+# re-runnable: clones if missing, otherwise fast-forward pulls.
 #
 # test-metal and test-gpu are GPU-dependent (need a real Apple Silicon GPU,
 # which all 3 nodes have) and are exactly the steps this cluster exists to
@@ -50,14 +51,27 @@ on_node_a() {
   [ "$name" = "${A_HOST%.local}" ]
 }
 
+# on_node_c — same idea as on_node_a, but for Node C (max-2). max-2 also
+# doubles as the dev→cluster SSH gateway (see CLAUDE.md), so this script is
+# frequently run directly on max-2 itself; without this check it would try
+# to SSH to itself as Node C and fail with "Permission denied" since Node C
+# isn't given passwordless SSH to itself either.
+on_node_c() {
+  local name
+  name="$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)"
+  [ "$name" = "${C_HOST%.local}" ]
+}
+
 if on_node_a; then
   say "Running from Node A (pro-1) — Pattern A coordination"
 else
   say "Running from $(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null) — driving the cluster remotely (Node D / Pattern B if this is the enrolled dev laptop)"
 fi
 
-# build_and_test_local — run in the current shell (used only when this machine IS Node A)
+# build_and_test_local <label> — run in the current shell (used when this
+# machine IS the node being tested — Node A or Node C).
 build_and_test_local() {
+  local label="$1"
   cd "$(dirname "$0")/../.." || return 1
   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git pull --ff-only >/dev/null 2>&1 || warn "local repo: ff-only pull skipped (local changes present)"
@@ -65,16 +79,16 @@ build_and_test_local() {
   local step out any_fail=0
   for step in $ZIG_STEPS; do
     out="$(zig build "$step" --summary all 2>&1)"
-    echo "--- A: $step ---"
+    echo "--- $label: $step ---"
     echo "$out" | tail -5
     # Zig 0.16 writes the Build Summary to stderr and prints a cosmetic red
     # "failed command:" line for tests that write to stderr on a passing path
     # (see docs/orchestration/HANDOFF.md landmine #1) — the Build Summary line
     # is the truth (both streams merged above), so grep that, not the exit code.
     if echo "$out" | grep -q "Build Summary:.*tests passed"; then
-      ok "A: $step passed"
+      ok "$label: $step passed"
     else
-      warn "A: $step FAILED"
+      warn "$label: $step FAILED"
       any_fail=1
     fi
   done
@@ -110,7 +124,7 @@ build_and_test_remote() {
 
 if on_node_a; then
   say "Node A (pro-1, local): clone/pull + zig build test / test-metal / test-gpu"
-  if build_and_test_local; then ok "A: all steps passed"; else warn "A: one or more steps FAILED"; FAILS=$((FAILS+1)); fi
+  if build_and_test_local "A"; then ok "A: all steps passed"; else warn "A: one or more steps FAILED"; FAILS=$((FAILS+1)); fi
 else
   say "Node A ($A_HOST): clone/pull + zig build test / test-metal / test-gpu"
   if build_and_test_remote "$A_USER@$A_HOST" "A"; then ok "A: all steps passed"; else warn "A: one or more steps FAILED"; FAILS=$((FAILS+1)); fi
@@ -119,8 +133,13 @@ fi
 say "Node B ($B_HOST): clone/pull + zig build test / test-metal / test-gpu"
 if build_and_test_remote "$B_USER@$B_HOST" "B"; then ok "B: all steps passed"; else warn "B: one or more steps FAILED"; FAILS=$((FAILS+1)); fi
 
-say "Node C ($C_HOST): clone/pull + zig build test / test-metal / test-gpu"
-if build_and_test_remote "$C_USER@$C_HOST" "C"; then ok "C: all steps passed"; else warn "C: one or more steps FAILED"; FAILS=$((FAILS+1)); fi
+if on_node_c; then
+  say "Node C (max-2, local): clone/pull + zig build test / test-metal / test-gpu"
+  if build_and_test_local "C"; then ok "C: all steps passed"; else warn "C: one or more steps FAILED"; FAILS=$((FAILS+1)); fi
+else
+  say "Node C ($C_HOST): clone/pull + zig build test / test-metal / test-gpu"
+  if build_and_test_remote "$C_USER@$C_HOST" "C"; then ok "C: all steps passed"; else warn "C: one or more steps FAILED"; FAILS=$((FAILS+1)); fi
+fi
 
 say "LAN reachability (ping, 2 packets each)"
 # .local mDNS names resolve to IPv6 link-local addresses ahead of IPv4 on this
@@ -153,8 +172,13 @@ else
 fi
 check_ping "$B_USER@$B_HOST"  "$C_HOST" "B -> C"
 check_ping "$B_USER@$B_HOST"  "$A_HOST" "B -> A"
-check_ping "$C_USER@$C_HOST"  "$B_HOST" "C -> B"
-check_ping "$C_USER@$C_HOST"  "$A_HOST" "C -> A"
+if on_node_c; then
+  check_ping ""                 "$B_HOST" "C -> B"
+  check_ping ""                 "$A_HOST" "C -> A"
+else
+  check_ping "$C_USER@$C_HOST"  "$B_HOST" "C -> B"
+  check_ping "$C_USER@$C_HOST"  "$A_HOST" "C -> A"
+fi
 
 if [ "$FAILS" -eq 0 ]; then
   say "Cluster verification complete: all 3 nodes build+test clean (CPU+GPU), full LAN mesh reachable."

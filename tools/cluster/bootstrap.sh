@@ -16,11 +16,13 @@ set -uo pipefail
 
 ROLE="worker"
 IS_DOWNLOAD=0
+SHARE=0
 for arg in "$@"; do
   case "$arg" in
     --role) : ;;                       # value handled below
     primary|worker) ROLE="$arg" ;;
     --download) IS_DOWNLOAD=1 ;;
+    --share) SHARE=1 ;;
   esac
 done
 # allow "--role primary" form
@@ -167,7 +169,11 @@ if [ "$IS_DOWNLOAD" = "1" ]; then
 fi
 
 # 7b. Clone the DS5 repository ----------------------------------------------
-REPO_DIR="${DS5_REPO_DIR:-$HOME/qw3}"
+CODE_DIR="$HOME/Code"
+mkdir -p "$CODE_DIR"
+REPO_DIR="${DS5_REPO_DIR:-$CODE_DIR/qw3}"
+CLUSTER_DIR="$CODE_DIR/ds5-cluster"
+mkdir -p "$CLUSTER_DIR"
 REPO_URL="https://github.com/anonymuse/qw3.git"
 if [ -d "$REPO_DIR/.git" ]; then
   say "Updating existing DS5 repo at $REPO_DIR…"
@@ -181,8 +187,9 @@ fi
 # 8. Node facts for the orchestrator ----------------------------------------
 LOCALHOST="$(scutil --get LocalHostName 2>/dev/null || hostname)"
 LANIP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo unknown)"
+FACTS_FILE="$CLUSTER_DIR/node-facts-${LOCALHOST}.txt"
 say "NODE FACTS — paste these to the orchestrator session"
-cat <<EOF
+cat > "$FACTS_FILE" <<EOF
   role:        $ROLE
   download:    $([ "$IS_DOWNLOAD" = 1 ] && echo yes || echo no)
   hostname:    ${LOCALHOST}.local
@@ -190,9 +197,22 @@ cat <<EOF
   user:        $USER
   zig:         $ZIG_HAVE
   claude:      $(command -v claude >/dev/null 2>&1 && echo installed || echo MISSING)
-  repo:        ${REPO_DIR:-$HOME/qw3} $([ -d "${REPO_DIR:-$HOME/qw3}/.git" ] && echo "(ready)" || echo "(MISSING)")
+  repo:        $REPO_DIR $([ -d "$REPO_DIR/.git" ] && echo "(ready)" || echo "(MISSING)")
   ssh_pubkey:  $(cat "$HOME/.ssh/id_ed25519.pub")
 EOF
+cat "$FACTS_FILE"
+say "Saved to $FACTS_FILE — AirDrop this file to Node A, or copy the block above."
+
+if [ "${SHARE:-0}" = "1" ]; then
+  say "Uploading NODE FACTS to a public paste service (termbin.com)…"
+  URL=$(nc termbin.com 9999 < "$FACTS_FILE" 2>/dev/null | tr -d '\0')
+  if [ -n "$URL" ]; then
+    ok "Shared: $URL"
+    warn "That URL is PUBLIC — it contains this node's hostname, LAN IP, and SSH PUBLIC key (no secrets, but anyone with the link can read it)."
+  else
+    warn "Share failed; use the saved file instead: $FACTS_FILE (AirDrop it)."
+  fi
+fi
 
 say "NEXT (human): 1) run 'claude' once and finish the browser login.
               2) send the NODE FACTS block above to the orchestrator chat.

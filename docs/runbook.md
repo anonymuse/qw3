@@ -2,6 +2,12 @@
 
 How to produce the Phase 0 link measurements on the real 3-node cluster.
 
+This covers only the 3 TB5-bridged compute nodes (A/B/C). The dev/management
+laptop (Node D) is not TB5-connected and has no role in this benchmark — see
+[`tools/cluster/README.md`](../tools/cluster/README.md) for its bring-up and
+[`tools/cluster/topology.md`](../tools/cluster/topology.md) for the full
+4-node picture.
+
 ## 0. One-time cluster network setup
 
 On each Mac, after connecting the Thunderbolt 5 cables (full mesh: A–B, A–C, B–C):

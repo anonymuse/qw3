@@ -2,9 +2,10 @@
 # DS5 cluster — verify all 3 nodes have the qw3 repo, pass `zig build test` /
 # `test-metal` / `test-gpu`, and can reach each other on the LAN.
 #
-# Run from the PRIMARY node (Node A / pro-1) — or from any machine enrolled
-# via tools/cluster/enroll-dev-node.sh — after tools/cluster/setup-ssh-mesh.sh
-# has established the passwordless SSH mesh. Node A is always tested over SSH
+# Run from the PRIMARY node (Node A / pro-1, Pattern A) — or from Node D, the
+# dev/management laptop enrolled via tools/cluster/enroll-dev-node.sh
+# (Pattern B; see topology.md) — after tools/cluster/setup-ssh-mesh.sh has
+# established the passwordless SSH mesh. Node A is always tested over SSH
 # like B/C unless this script is actually running on Node A itself, so the
 # result labeled "Node A" is always Node A's checkout, never the invoking
 # machine's. Idempotent / re-runnable: clones if missing, otherwise
@@ -38,16 +39,22 @@ REMOTE_REPO_DIR="\$HOME/Code/qw3"
 FAILS=0
 
 # on_node_a — true if this machine IS Node A (pro-1), false if we're some
-# other machine (e.g. a dev laptop enrolled via enroll-dev-node.sh) driving
-# the cluster remotely. Node A is never given passwordless SSH to itself (see
-# setup-ssh-mesh.sh / enroll-dev-node.sh), so this gates the local fast path
-# instead of unconditionally SSHing to A, which would break when actually
-# run on A.
+# other machine (e.g. Node D, the dev laptop enrolled via
+# enroll-dev-node.sh) driving the cluster remotely. Node A is never given
+# passwordless SSH to itself (see setup-ssh-mesh.sh / enroll-dev-node.sh), so
+# this gates the local fast path instead of unconditionally SSHing to A,
+# which would break when actually run on A.
 on_node_a() {
   local name
   name="$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)"
   [ "$name" = "${A_HOST%.local}" ]
 }
+
+if on_node_a; then
+  say "Running from Node A (pro-1) — Pattern A coordination"
+else
+  say "Running from $(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null) — driving the cluster remotely (Node D / Pattern B if this is the enrolled dev laptop)"
+fi
 
 # build_and_test_local — run in the current shell (used only when this machine IS Node A)
 build_and_test_local() {

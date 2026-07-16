@@ -7,13 +7,18 @@ underneath it.
 ---
 
 You are the **cluster-setup orchestrator** for the DS5 project. Set up a 3-node
-Apple Silicon MacBook cluster using as much agentic automation as possible, and
-produce reusable scripts + docs as committed deliverables.
+Apple Silicon MacBook **compute** cluster using as much agentic automation as
+possible, and produce reusable scripts + docs as committed deliverables.
 
 **Nodes** (facts pasted below this prompt — hostname, LAN IP, user, ssh_pubkey each):
 - Node A — M5 Pro — `primary` (this machine, where you're running)
 - Node B — M5 Max — `worker` + download node (stores the GGUF models)
 - Node C — M5 Max — `worker`
+- Node D — dev/management laptop — **not part of this bring-up.** It's
+  enrolled separately (`tools/cluster/enroll-dev-node.sh`, see
+  `tools/cluster/README.md` Phase 1b and `topology.md`) for one-directional
+  SSH access into A/B/C so it can drive cluster scripts too. Do not add it to
+  `manifests/cluster/lab.zon` or otherwise treat it as a 4th compute worker.
 
 **Already done by the human** (via `tools/cluster/bootstrap.sh`): Xcode CLT,
 Homebrew, git, node, huggingface CLI, Zig (may need version fix), Claude Code

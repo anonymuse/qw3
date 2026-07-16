@@ -8,6 +8,13 @@ Recorded by the orchestrator agent after `setup-ssh-mesh.sh` and
 | A | M5 Pro | `primary` (orchestrator) | `pro-1.local` | 192.168.1.95 | jesse | 0.16.0 | `ds5-pro-1` |
 | B | M5 Max | `worker` + download | `max-1.local` | 192.168.1.98 | jesse | 0.16.0 | `ds5-max-1` |
 | C | M5 Max | `worker` | `max-2.local` | 192.168.1.96 | jesse | 0.16.0 | `ds5-max-2` |
+| D | MacBook Air (M5, 24GB) | `dev` (management/orchestration, **non-compute**) | `Jesses-MacBook-Air.local` | — (LAN-local, not TB5-bridged) | jessewhite | n/a | `ds5-dev-air` |
+
+Node D is the development laptop this project is run from day-to-day. It is
+**deliberately excluded** from `manifests/cluster/lab.zon` (the TB5 inference
+mesh) — see "Node D details" below — and its Zig/build status is irrelevant to
+cluster health checks. It appears in this table so the node lettering always
+reflects "how many machines touch this project," not just the 3 compute nodes.
 
 ## Notes / gotchas hit during setup
 
@@ -41,18 +48,23 @@ Recorded by the orchestrator agent after `setup-ssh-mesh.sh` and
   stderr (see `docs/orchestration/HANDOFF.md` landmine #1) — exit code and
   the Build Summary line are the ground truth, not that line.
 
-## Dev / management access
+## Node D details / access model
 
-`tools/cluster/enroll-dev-node.sh` grants a personal dev laptop passwordless
-SSH into A, B, and C (one-directional: dev laptop → cluster only; the
-cluster never holds a key back into the dev laptop). This is admin/control
-access for driving cluster scripts remotely — it does **not** make the
-laptop a DS5 compute participant, so it is deliberately absent from
-`manifests/cluster/lab.zon`.
+`tools/cluster/enroll-dev-node.sh` grants Node D passwordless SSH into A, B,
+and C (**one-directional**: D → cluster only; the cluster never holds a key
+back into D). This is admin/control access for driving cluster scripts
+remotely — it does **not** make Node D a DS5 compute participant, so it stays
+deliberately absent from `manifests/cluster/lab.zon`.
 
-| Machine | Role | Hostname | User | SSH pubkey comment | Enrolled |
-|---|---|---|---|---|---|
-| MacBook Air (M5, 24GB) | `dev` (management only) | `Jesses-MacBook-Air.local` | jessewhite | `ds5-dev-air` | 2026-07-15 — verified passwordless to A/B/C |
+Enrolled 2026-07-15 — verified passwordless SSH from D to A, B, and C.
+
+Why this split matters: any automation that needs to reach the cluster (run
+`verify-cluster.sh`, kick off a benchmark, drive an orchestrator session) can
+be run from **either** Node A (Pattern A, SSH-from-primary, see below) **or**
+Node D (Pattern B — SSH-from-dev, the same scripts, just invoked from the
+laptop instead of the Pro). Only one of these should be actively driving the
+cluster at a time — there's no lock file or coordination primitive between
+them yet (see "Suggested enhancements" in `tools/cluster/README.md`).
 
 ## Coordination primitive used
 
@@ -66,6 +78,15 @@ there, `setup-ssh-mesh.sh` distributed the remaining key pairs and verified
 all 6 directions (B↔C directions verified by proxying one hop through their
 own SSH access, e.g. `ssh B "ssh C true"`, since the orchestrator only has a
 shell on A).
+
+**Pattern B: SSH from Node D.** Identical mechanism, different origin: a
+Claude Code session running locally on the dev laptop (Node D) drives A, B,
+and C directly over the SSH mesh `enroll-dev-node.sh` established, without
+needing a shell on Node A at all. Use this when the work is being directed
+from the dev laptop rather than from a session physically orchestrating on
+the M5 Pro. Whichever pattern a given session uses, it should be the *only*
+one actively issuing commands to the cluster at that moment — see the
+concurrency note in "Node D details" above.
 
 ## Model download (T06 gate)
 

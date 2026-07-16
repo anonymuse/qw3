@@ -2,9 +2,13 @@
 # DS5 cluster — verify all 3 nodes have the qw3 repo, pass `zig build test`,
 # and can reach each other on the LAN.
 #
-# Run from the PRIMARY node (Node A / pro-1), after tools/cluster/setup-ssh-mesh.sh
-# has established the passwordless SSH mesh. Idempotent / re-runnable: clones
-# if missing, otherwise fast-forward pulls.
+# Run from the PRIMARY node (Node A / pro-1) — or from any machine enrolled
+# via tools/cluster/enroll-dev-node.sh — after tools/cluster/setup-ssh-mesh.sh
+# has established the passwordless SSH mesh. Node A is always tested over SSH
+# like B/C unless this script is actually running on Node A itself, so the
+# result labeled "Node A" is always Node A's checkout, never the invoking
+# machine's. Idempotent / re-runnable: clones if missing, otherwise
+# fast-forward pulls.
 
 set -uo pipefail
 
@@ -21,7 +25,19 @@ C_USER="jesse"; C_HOST="max-2.local"
 
 FAILS=0
 
-# build_and_test_local — run in the current shell (used for Node A, this machine)
+# on_node_a — true if this machine IS Node A (pro-1), false if we're some
+# other machine (e.g. a dev laptop enrolled via enroll-dev-node.sh) driving
+# the cluster remotely. Node A is never given passwordless SSH to itself (see
+# setup-ssh-mesh.sh / enroll-dev-node.sh), so this gates the local fast path
+# instead of unconditionally SSHing to A, which would break when actually
+# run on A.
+on_node_a() {
+  local name
+  name="$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)"
+  [ "$name" = "${A_HOST%.local}" ]
+}
+
+# build_and_test_local — run in the current shell (used only when this machine IS Node A)
 build_and_test_local() {
   cd "$(dirname "$0")/../.." || return 1
   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -53,8 +69,13 @@ build_and_test_remote() {
   "
 }
 
-say "Node A (pro-1, local): clone/pull + zig build test"
-if build_and_test_local; then ok "A: tests passed"; else warn "A: tests FAILED"; FAILS=$((FAILS+1)); fi
+if on_node_a; then
+  say "Node A (pro-1, local): clone/pull + zig build test"
+  if build_and_test_local; then ok "A: tests passed"; else warn "A: tests FAILED"; FAILS=$((FAILS+1)); fi
+else
+  say "Node A ($A_HOST): clone/pull + zig build test"
+  if build_and_test_remote "$A_USER@$A_HOST"; then ok "A: tests passed"; else warn "A: tests FAILED"; FAILS=$((FAILS+1)); fi
+fi
 
 say "Node B ($B_HOST): clone/pull + zig build test"
 if build_and_test_remote "$B_USER@$B_HOST"; then ok "B: tests passed"; else warn "B: tests FAILED"; FAILS=$((FAILS+1)); fi
@@ -80,8 +101,17 @@ check_ping() {
   fi
   if [ $? -eq 0 ]; then ok "$label reachable"; else warn "$label FAILED"; FAILS=$((FAILS+1)); fi
 }
-check_ping ""                 "$B_HOST" "A -> B"
-check_ping ""                 "$C_HOST" "A -> C"
+# "A -> B"/"A -> C" ping from wherever Node A actually is: locally when this
+# machine IS Node A (empty from_dest, same as check_ping's other local uses),
+# otherwise hop over SSH to A first — same on_node_a gate as the build/test
+# step above, for the same reason (this machine may not be Node A).
+if on_node_a; then
+  check_ping ""                 "$B_HOST" "A -> B"
+  check_ping ""                 "$C_HOST" "A -> C"
+else
+  check_ping "$A_USER@$A_HOST"  "$B_HOST" "A -> B"
+  check_ping "$A_USER@$A_HOST"  "$C_HOST" "A -> C"
+fi
 check_ping "$B_USER@$B_HOST"  "$C_HOST" "B -> C"
 check_ping "$B_USER@$B_HOST"  "$A_HOST" "B -> A"
 check_ping "$C_USER@$C_HOST"  "$B_HOST" "C -> B"

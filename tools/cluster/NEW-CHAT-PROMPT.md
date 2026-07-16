@@ -28,10 +28,14 @@ installed + logged in, Remote Login/SSH enabled, an ed25519 key generated on eac
    this primary node into B and C — that is a fully acceptable Pattern A fallback,
    don't burn time forcing peer agents. State which one you're using and why.
 
-2. **SSH mesh.** Distribute each node's public key to the other two
-   (`authorized_keys`), so all three have passwordless SSH in every direction.
-   Verify with `ssh <node> true` in all 6 directions. Write this up as an
-   idempotent `tools/cluster/setup-ssh-mesh.sh`.
+2. **SSH mesh.** Build passwordless SSH in all directions. Each node's SSH **public** key is already in the pasted NODE FACTS blocks — nothing more to copy/paste. Your job is to write them into `authorized_keys` on the worker nodes.
+   - Use `ssh-copy-id -i ~/.ssh/id_ed25519.pub <user>@<node>.local` to push keys from the primary to each worker.
+   - If `ssh-copy-id` is absent, use the portable fallback: `cat ~/.ssh/id_ed25519.pub | ssh <user>@<node> 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys'`.
+   - You'll need each worker's login password once when prompted — **password auth works immediately once Remote Login is on**, so you don't need the keys to bootstrap the keys.
+   - After installation, verify passwordless SSH works in all 6 directions with `ssh <node> true`.
+   - Write the mesh setup up as an idempotent `tools/cluster/setup-ssh-mesh.sh`.
+   
+   **Advanced/optional:** If the worker nodes are running peered Claude Code sessions (Remote Control, same account), you can skip `ssh-copy-id` and instead `SendMessage` each worker its `authorized_keys` lines to install locally — fully hands-off, no passwords required. Use this only if peers are available.
 
 3. **Toolchain repair.** On each node, confirm `zig version` is 0.16.x. If a node
    has the wrong Zig (brew often ships a different stable), download the matching

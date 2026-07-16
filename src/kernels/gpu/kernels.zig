@@ -210,8 +210,6 @@ pub fn matmul(ctx: *Ctx, args: contracts.MatmulArgs) KernelError!void {
 pub fn kvAppend(ctx: *Ctx, args: contracts.KvAppendArgs) KernelError!void {
     if (args.head_dim == 0 or args.n_kv_heads == 0) return KernelError.ShapeMismatch;
     if (args.pos + args.n_tokens > args.max_ctx) return KernelError.ShapeMismatch;
-<<<<<<< HEAD
-
     const cache_elem_bytes: u64 = if (args.kv_dtype == .f32) 4 else if (args.kv_dtype == .f16) 2 else return KernelError.UnsupportedDtype;
     const cache_bytes = @as(u64, args.n_kv_heads) * args.max_ctx * args.head_dim * cache_elem_bytes;
     if (args.k_cache.len < cache_bytes or args.v_cache.len < cache_bytes) return KernelError.ShapeMismatch;
@@ -219,10 +217,6 @@ pub fn kvAppend(ctx: *Ctx, args: contracts.KvAppendArgs) KernelError!void {
     ensureBatch(ctx);
     const kernel_name = if (args.kv_dtype == .f32) "kv_append_f32" else "kv_append_f16";
     const pso = try ctx.pipeline(kernel_name);
-=======
-    ensureBatch(ctx);
-    const pso = try ctx.pipeline("kv_append_f32");
->>>>>>> c8eaaf6 (T05: M2b GPU forward pass — kernel provider dispatches kernels_a/b/c.metal)
     ctx.setPipeline(pso);
     const p = KvAppendParams{
         .n_tokens = args.n_tokens,
@@ -230,10 +224,7 @@ pub fn kvAppend(ctx: *Ctx, args: contracts.KvAppendArgs) KernelError!void {
         .head_dim = args.head_dim,
         .pos = args.pos,
         .max_ctx = args.max_ctx,
-<<<<<<< HEAD
         .kv_dtype = @intFromEnum(args.kv_dtype),
-=======
->>>>>>> c8eaaf6 (T05: M2b GPU forward pass — kernel provider dispatches kernels_a/b/c.metal)
     };
     ctx.setBytes(0, std.mem.asBytes(&p));
     ctx.setBuf(1, args.k_new);
@@ -265,8 +256,6 @@ pub fn gqaAttention(ctx: *Ctx, args: contracts.AttnArgs) KernelError!void {
     if (args.n_q_heads % args.n_kv_heads != 0) return KernelError.ShapeMismatch;
     if (args.pos + args.n_tokens > args.max_ctx) return KernelError.ShapeMismatch;
     if (args.head_dim > DS5_MAX_HEAD_DIM) return KernelError.ShapeMismatch;
-<<<<<<< HEAD
-
     const q_bytes = @as(u64, args.n_tokens) * args.n_q_heads * args.head_dim * @sizeOf(f32);
     if (args.q.len < q_bytes or args.out.len < q_bytes) return KernelError.ShapeMismatch;
 
@@ -277,15 +266,6 @@ pub fn gqaAttention(ctx: *Ctx, args: contracts.AttnArgs) KernelError!void {
     ensureBatch(ctx);
     const kernel_name = if (args.kv_dtype == .f32) "gqa_attention_f32" else "gqa_attention_f16";
     const pso = try ctx.pipeline(kernel_name);
-=======
-    const q_bytes = @as(u64, args.n_tokens) * args.n_q_heads * args.head_dim * @sizeOf(f32);
-    if (args.q.len < q_bytes or args.out.len < q_bytes) return KernelError.ShapeMismatch;
-    const cache_bytes = @as(u64, args.n_kv_heads) * args.max_ctx * args.head_dim * @sizeOf(f32);
-    if (args.k_cache.len < cache_bytes or args.v_cache.len < cache_bytes) return KernelError.ShapeMismatch;
-
-    ensureBatch(ctx);
-    const pso = try ctx.pipeline("gqa_attention_f32");
->>>>>>> c8eaaf6 (T05: M2b GPU forward pass — kernel provider dispatches kernels_a/b/c.metal)
     ctx.setPipeline(pso);
     const p = GqaAttnParams{
         .n_q_heads = args.n_q_heads,
@@ -294,10 +274,7 @@ pub fn gqaAttention(ctx: *Ctx, args: contracts.AttnArgs) KernelError!void {
         .pos = args.pos,
         .n_tokens = args.n_tokens,
         .max_ctx = args.max_ctx,
-<<<<<<< HEAD
         .kv_dtype = @intFromEnum(args.kv_dtype),
-=======
->>>>>>> c8eaaf6 (T05: M2b GPU forward pass — kernel provider dispatches kernels_a/b/c.metal)
         .scale = args.scale,
     };
     ctx.setBytes(0, std.mem.asBytes(&p));
@@ -768,6 +745,7 @@ test "GPU attention fixtures: prefill + decode, all layers, in tolerance" {
             .n_kv_heads = n_kv_heads,
             .head_dim = head_dim,
             .max_ctx = max_ctx,
+            .kv_dtype = .f32,
             .scale = scale,
         });
         try ctx.submit();
@@ -965,6 +943,7 @@ test "GPU kvAppend: round-trip scatter matches the CPU semantics, bit-exact" {
         .n_kv_heads = n_kv_heads,
         .head_dim = head_dim,
         .max_ctx = max_ctx,
+        .kv_dtype = .f32,
     });
     try ctx.submit();
 

@@ -1,0 +1,26 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "metal-backend-generation",
+      "description": "Run 64-step Metal backend generation (optimized for max-2, ~12-15m)",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["./tools/run-metal-backend-remote.sh"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "metal-backend-generation-max-2",
+      "description": "Run 64-step Metal backend generation on max-2 via SSH",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "ssh -4 jesse@max-2.local 'cd ~/Code/qw3 && ./tools/run-metal-backend-remote.sh --output-dir ./bench/results/metal-generation-remote'"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "verify-cluster",
+      "description": "Run cluster verification test (3-node SSH mesh, loopback bench)",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["./tools/cluster/verify-cluster.sh"],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

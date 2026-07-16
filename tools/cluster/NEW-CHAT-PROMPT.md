@@ -49,8 +49,8 @@ installed + logged in, Remote Login/SSH enabled, an ed25519 key generated on eac
    Verify the downloaded files exist and are non-truncated (sha256 or size check).
 
 5. **Cluster verification.** On all three nodes: the qw3 repo is already cloned to
-   `~/qw3` by bootstrap.sh — just run `zig build test` there and confirm it passes.
-   If `~/qw3` is somehow absent, fall back to cloning manually. Confirm each node can
+   `~/Code/qw3` by bootstrap.sh — just run `zig build test` there and confirm it passes.
+   If `~/Code/qw3` is somehow absent, fall back to cloning manually. Confirm each node can
    reach the others on the LAN. Write this up as an idempotent `tools/cluster/verify-cluster.sh`.
 
 6. **Deliverables.** Commit to the qw3 repo under `tools/cluster/`:

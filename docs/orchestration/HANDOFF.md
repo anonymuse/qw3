@@ -70,6 +70,7 @@ your current session.
 | W6 | M1 viability (decode-sim, placement sim, f001) | `w6-m1-viability` | DEFERRED by owner (2026-07-12, "skip benchmarks for now"). Partial WIP in worktree `agent-a07b894d896d995d4`; T03 prompt ready when reactivated. |
 | T04 | M2a CPU forward pass | `t04-cpu-forward` | DONE, merged (2026-07-12). 5/5 fixture prompts, greedy exact, trace hook validated. `ds5 run` CLI works. 74/74 tests green. |
 | T05 | M2b GPU forward pass | `t05-gpu-forward` | DONE (2026-07-13). GPU kernel provider (`src/kernels/gpu/kernels.zig`) dispatches kernels_a/b/c.metal exactly per their PORTING docs; router stays CPU-only per PORTING-moe.md §1. `zig build test-gpu` 81/81 green on real Apple M5 hardware: all per-op fixtures (rmsnorm/rope/matmul_quant/attention/router/expert_mlp) match the CPU oracle in tolerance, 5/5 e2e prompts logits-in-tolerance + greedy exact, GPU-vs-CPU direct trace diff passes all 4 layers (worst max_abs_diff 4.3e-7), `zig build test`/`test-metal` unaffected (74/74, 21/21). `ds5 run --backend metal` works, emits per-layer GPU-ns run-metadata JSON to `bench/results/`. One deliberate scope decision below (KV dtype) needs orchestrator follow-up before it's actionable. |
+| T06 | M2c real-weights gate (Qwen3-30B-A3B) | `t06-real-30b` | **PARTIAL PASS (2026-07-16).** Full results in `docs/findings/m2-gate.md`. Mechanical checks pass: real 30B GGUF loads and runs e2e on both CPU and Metal backends, config parsed from GGUF metadata matches ADR-001/ADR-005 exactly, loader confirmed mmap-backed (~6GB peak RSS on a 32GB file). Oracle comparison is mixed: greedy-token-exact-match 3/5 prompts (p3 diverges at token 48/64, p4 at token 7/64); final-logit tolerance (5e-2/5e-2) 0/5, though the 3 token-exact prompts have small diffs (0.28–1.77 max abs) that never flip an argmax. CPU and Metal agree with each other to 4+ significant figures throughout, ruling out a backend-specific bug. Router parity (prompt p0, layers 0/23/47): 14/15 token/layer combos match; both misses are single-expert swaps (1 of 8) isolated to token 0 at the two deeper layers only — plausible fp32 computation-order sensitivity at a top-k tie boundary, not conclusively root-caused within gate scope (explicit hand-back point per the T06 brief). **T07 should not be unblocked on this result** — see §3 note below. |
 
 **DECIDED 2026-07-12:** KV cache dtype frozen to **f16** via ADR-005 amendment (rationale:
 M3 inter-node decode bandwidth at 32K context, placement budget headroom, fixture regen
@@ -95,6 +96,20 @@ field or a frozen-f16 rule), both PORTING-kernels-a/b.md, both kernels_a/b.metal
 reference kernels_a/b.zig, and a fixture regen — i.e. a real ADR-005 amendment PR, not a
 one-file change.
 
+**T06 gate note (2026-07-16):** the real-weights gate is a **partial pass**, not a
+pass — greedy-token-exact-match at 3/5 prompts and logit-tolerance at 0/5 is short of
+the gate's bar, even though mechanical/config/memory checks and CPU/Metal parity are
+strong (full detail in `docs/findings/m2-gate.md`). Recommended next step for whoever
+picks this up: extend `tools/make_fixtures.py`'s per-layer trace fixtures to prompts p3
+and p4 (currently only p0 is traced) and use the trace-hook pattern from
+`test_forward.zig`/`test_gpu_forward.zig` to localize the first layer where their hidden
+states diverge beyond the per-op tolerance. **T07 (M3 distributed) should not start
+until this gate reaches a real pass** — do not treat T06 as cleared in the DAG below.
+Separately, and independent of the gate result: the real 3-node `ds5 bench link` run
+(item 2 below) still hasn't happened — only a loopback smoke run exists in
+`bench/results/` — and that is also a hard blocker for T07's distributed work, so it
+should be scheduled regardless of how the T06 root-cause investigation goes.
+
 **Hardware inputs owed by the project owner (Jesse)** — every prompt that
 needs them says what to use as a clearly-marked placeholder until they exist:
 1. Qwen3-30B-A3B Q8_0 GGUF (~32GB) at `~/ds5-models/qwen3-30b-a3b-instruct-2507-gguf/` on a worker node (`tools/download_models.sh`).
@@ -107,8 +122,11 @@ needs them says what to use as a clearly-marked placeholder until they exist:
 T01 finish W1 (GGUF parser)  ──┐
 T02 finish W4 (GQA attention) ─┼→ T04 M2a CPU forward pass (synthetic) → T05 M2b GPU forward pass
 T03 finish W6 (M1/f001 draft) ─┘         │                                    │
-        [30B GGUF lands] ────────────────┴→ T06 M2c real-weights gate ─→ T07 M3 distributed (2-proc, then B/C)
+        [30B GGUF lands] ────────────────┴→ T06 M2c real-weights gate ─→ (PARTIAL PASS 2026-07-16,
+                                                                            root-cause not done — T07 blocked)
+                                                                          → T07 M3 distributed (2-proc, then B/C)
         [mesh JSONs land] ──→ T03 update → T09
+        [real 3-node bench link still needed — blocks T07 independent of T06 gate result]
         [telemetry lands] ──→ T08 235B placement + IQ2 kernels (STRETCH; only after T07 gate) 
 T09 ship: f001 final, README, runbooks, PRs (last 2 days, always runs)
 ```

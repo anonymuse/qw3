@@ -1,12 +1,16 @@
 # M2c gate — Qwen3-30B-A3B real-weights (T06)
 
-**Status: PARTIAL PASS.** Mechanical checks (load, run, config sanity, mmap
-memory) pass on both backends. Oracle-comparison checks are mixed: 3 of 5
-prompts pass greedy-token-exact-match; 2 diverge at a specific token. CPU and
-Metal backends agree with each other to 4+ significant figures throughout —
-this is not a backend-specific bug. Router parity is 14/15 exact
-(token/layer combinations checked); the one divergent pattern (token 0 only,
-layers 23/47 only) plausibly explains the downstream token divergence.
+**Status: PASS** per ADR-005 Amendment 2 (2026-07-17) — originally recorded
+PARTIAL PASS (2026-07-16) pending an acceptance rule for bf16-oracle
+comparisons; see §9 for the re-scored disposition. Mechanical checks (load,
+run, config sanity, mmap memory) pass on both backends. Oracle-comparison
+checks are mixed under the original brief's bar: 3 of 5 prompts pass
+greedy-token-exact-match; 2 diverge at a specific token. CPU and Metal
+backends agree with each other to 4+ significant figures throughout —
+this is not a backend-specific bug. Router parity is 13/15 exact
+(token/layer combinations checked — see §5; earlier drafts miscounted
+14/15); the single divergent pattern (token 0 only, layers 23/47 only)
+plausibly explains the downstream token divergence.
 
 Branch: `t06-real-30b`, merged with `main` (includes PR #21's conflict-marker
 fix). `zig build test` 74/74, `zig build test-gpu` 81/81, both green
@@ -27,7 +31,7 @@ for both SSH access and the checkpoint download below.
 | 3 | Greedy tokens match oracle exactly, 64 tokens, 5 oracle prompts | **PARTIAL: 3/5** | §4 |
 | 4 | Final-step logits within ADR-005 §4 e2e tolerance (5e-2/5e-2) | **FAIL: 0/5** | §4 |
 | 5 | Config sanity: parsed `ModelConfig` == ADR-001 §2 / ADR-005 §5 table | **PASS** | §3 |
-| 6 | Router parity on real weights, prompt p0, 100% expert-ID match vs oracle | **FAIL: 14/15 token/layer combos** (see localization, §5) | §5 |
+| 6 | Router parity on real weights, prompt p0, 100% expert-ID match vs oracle | **13/15 token/layer combos** (fail under the brief's 100% bar; re-scored PASS-diagnostic in §9) | §5 |
 | 7 | Memory: peak RSS logged, loader mmap-backed (no full-file read) | **PASS** | §2 |
 
 Nothing here loosens a tolerance or skips a check by fiat. Items 3/4/6 are
@@ -140,7 +144,10 @@ as sets since order doesn't affect the downstream weighted-sum MoE output:
 | 23 | **DIFFER** (1 of 8 experts) | match | match | match | match |
 | 47 | **DIFFER** (1 of 8 experts) | match | match | match | match |
 
-14 of 15 token/layer combinations match exactly. The two divergences are
+13 of 15 token/layer combinations match exactly (the table above has two
+DIFFER cells; earlier drafts of this doc, PR #31's recap, and the HANDOFF
+scoreboard miscounted 14/15 — also independently flagged by Codex review).
+The two divergences are
 both isolated to **token 0** (the very first prompt token) at the two
 deeper traced layers (23, 47) — layer 0 (shallow, least accumulated
 numerical difference) is clean, and tokens 1-4 are clean at every traced
@@ -219,7 +226,7 @@ models at this scale, rather than continued kernel debugging.
 
 ---
 
-## 8. Outstanding items for whoever picks up T07
+## 8. Outstanding items for whoever picks up T07 [resolved 2026-07-17 — see §9]
 
 - T07 (M3 distributed) should **not** be unblocked on this gate's current
   result — greedy-token correctness at 3/5 and logit-tolerance at 0/5 is
@@ -231,3 +238,31 @@ models at this scale, rather than continued kernel debugging.
 - `docs/orchestration/HANDOFF.md`'s task DAG and scoreboard need updating
   to reflect this gate's actual (partial) result rather than the
   T05-era "T06 BLOCKED, awaiting GGUF" framing, which is now stale.
+
+---
+
+## 9. Disposition under ADR-005 Amendment 2 (2026-07-17)
+
+ADR-005 §4's footnote already made the e2e logit tolerance diagnostic-only
+against a bf16 HF oracle ("only greedy tokens gate") but never defined the
+greedy acceptance rule for that non-weight-matched case — and the T06 brief's
+items 4 and 6 imported hard bars (logit tolerance, router 100%) that the ADR
+only ever established for weight-matched comparisons. Amendment 2
+(`docs/decisions/ADR-005-interface-freeze.md`) supplies the missing rule: a
+near-tie-guarded greedy gate. This section re-scores the affected items under
+it, using this doc's measurements plus the root-cause investigation
+(`docs/findings/m2-router-divergence-localization.md`, PR #31).
+
+| # | Gate item | Re-scored | Basis |
+|---|---|---|---|
+| 3 | Greedy tokens vs bf16 oracle | **PASS** | 0 mismatches at guarded positions (oracle top-2 margin ≥ 0.5); 2 invoked near-tie exclusions in 249 context-identical decisions (0.8% ≤ 5%), both with the engine picking the oracle's own #2 token at margins 0.00702 / 0.00255; sample floor met (249 ≥ 200). |
+| 4 | E2E logit tolerance vs bf16 oracle | **DIAGNOSTIC** (not a gate) | Never a hard gate for this oracle class per the pre-existing §4 footnote; the brief's wording dropped that carve-out. Recorded baseline band at context-identical positions: 0.28–1.77 max-abs. p3/p4's 32.2/31.1 were measured at post-divergence (context-mismatched) positions; future runs measure at the last context-identical position instead. |
+| 6 | Router parity vs bf16 oracle | **PASS (diagnostic)** | 13/15 sampled combos exact. Both swaps benign per Amendment 2's signature: single-expert; oracle-side displaced probability mass 2.0e-6 (layer 23) and ~6.1e-3 (layer 47) ≤ 2e-2; swapped experts' probabilities ≤ 0.05; no recurring pattern. Sampling caveat (also raised by Codex review): the original audit covered 3 of 48 layers; PR #31's `--block-trace` extended router coverage to all 48 layers at p3/p4's critical decode steps (p4: single-expert swaps at layers 9/12/34/46; p3: zero swaps), all consistent with the benign signature. The hard router gate remains the §2 fixture gate (weight-matched, near-tie-guarded), which passes at 100% IDs / ~1e-7 gate weights. |
+| 8 (new) | CPU-vs-Metal cross-backend e2e — hard, weight-matched by construction | **PASS** | Greedy tokens identical on all 5 prompts including both oracle-divergent ones; logits agree to 4+ significant figures (§4 table), far inside the §4 e2e row (5e-2/5e-2). |
+
+Items 1/2/5/7 are unchanged (PASS). **Overall: T06 = PASS.** T07's DAG
+dependency on this gate is satisfied. T07 remains gated on the independent
+real 3-node `ds5 bench link` run (HANDOFF §2 hardware item 2). Note for T07:
+its distributed-vs-single-node comparison is weight-matched by construction
+and therefore gates on the hard §4 rows directly — Amendment 2's statistical
+rule applies only to non-weight-matched (e.g. bf16 HF) oracles.

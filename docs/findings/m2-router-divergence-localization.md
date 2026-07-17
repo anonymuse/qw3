@@ -30,7 +30,9 @@ against the oracle manifest's `greedy_tokens`, both here independently and
 consistent with the gate doc's "48/64" and "7/64" language). CPU and Metal
 backends agree with each other far more tightly than either agrees with the
 oracle, ruling out a backend-specific bug. Router parity for p0 at layers
-0/23/47 is 14/15 token/layer combinations exact; the two exceptions are both
+0/23/47 is 13/15 token/layer combinations exact (13, not the 14 the gate
+doc's prose originally stated — its own table shows two DIFFER cells, since
+corrected); the two exceptions are both
 at token 0, layers 23 and 47 (a single expert swapped out of the top-8 each
 time): layer 23 oracle picks expert 80 vs real picks 120; layer 47 oracle
 picks expert 55 vs real picks 20.

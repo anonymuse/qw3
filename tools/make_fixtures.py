@@ -845,6 +845,89 @@ def run_synthetic(out_dir: Path, seed: int, n_new: int):
           f"{total / 1e6:.1f} MB in {out_dir}")
 
 
+def run_hf_blocktrace(model_dir: Path, out_dir: Path, prompt_name: str,
+                       append_n: int, layers: list[int] | None):
+    """T06 follow-up (M2c router-divergence localization): trace an
+    ARBITRARY prompt (by REAL_PROMPT_TEXTS name), optionally extended with
+    the first `append_n` tokens of its own oracle greedy continuation, and
+    dump per-layer residual-stream + router state — NOT the full per-op
+    battery emit_layer_cases produces (that's for kernel-exactness gating
+    and is expensive per layer on a 30B model); this is a light, fast dump
+    meant for one-off layer-localization diagnostics.
+
+    Unlike run_hf's per-op trace (hardcoded to prompts[0] == p0_capital),
+    this lets any prompt be traced, and `--trace-append N` extends the
+    traced sequence past the prompt into the decode steps that produced
+    tokens generated[0..N-1] — needed to localize divergences that first
+    appear deep into generation (e.g. p3/p4 in the T06 gate), not just in
+    the prefill.
+
+    Output: {out_dir}/blocktrace_{prompt_name}/l{i}_block_out.ds5t (T,hidden),
+    l{i}_router_ids.ds5t (T,top_k) i32, l{i}_router_gate_w.ds5t (T,top_k),
+    l{i}_router_probs_full.ds5t (T,n_experts) — the FULL post-softmax
+    distribution, not just the top-k the router kernel contract exposes —
+    plus meta.json with the traced token sequence.
+
+    If `append_n` > 0 and {out_dir}/manifest.json already has a "prompts"
+    entry for this prompt with >= append_n greedy_tokens (i.e. an --e2e run
+    already happened here), those EXACT tokens are reused instead of
+    recomputing greedy_decode — same deterministic model/code path, and
+    avoids ~append_n redundant O(seq^2) recompute-from-scratch passes.
+    """
+    wp = HfProvider(model_dir)
+    cfg = wp.config()
+    n_layers = cfg["n_layers"]
+    want = set(range(n_layers)) if not layers else set(layers)
+
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(model_dir)
+    prompts = [(name, text, tok(text)["input_ids"]) for name, text in REAL_PROMPT_TEXTS]
+    match = [p for p in prompts if p[0] == prompt_name]
+    if not match:
+        names = ", ".join(p[0] for p in prompts)
+        raise SystemExit(f"unknown --trace-prompt {prompt_name!r}; choices: {names}")
+    name, text, ptoks = match[0]
+
+    seq = list(ptoks)
+    if append_n > 0:
+        reused = False
+        manifest_path = out_dir / "manifest.json"
+        if manifest_path.exists():
+            existing = json.loads(manifest_path.read_text())
+            for p in existing.get("prompts", []):
+                if p["name"] == name and len(p.get("greedy_tokens", [])) >= append_n:
+                    seq = list(ptoks) + list(p["greedy_tokens"][:append_n])
+                    reused = True
+                    print(f"[blocktrace] {name}: reusing {append_n} greedy tokens "
+                          f"from existing {manifest_path}")
+                    break
+        if not reused:
+            print(f"[blocktrace] {name}: no cached greedy_tokens found, "
+                  f"recomputing {append_n} steps (slow: O(n^2) recompute)")
+            seq = greedy_decode(ptoks, wp, cfg, append_n)
+    print(f"[blocktrace] {name}: prompt {len(ptoks)} tokens + {append_n} appended "
+          f"= {len(seq)} traced positions, {len(want)} layers")
+
+    t0 = time.time()
+    _, traces = model_forward(seq, wp, cfg, want_traces=want)
+
+    bdir = out_dir / f"blocktrace_{name}"
+    bdir.mkdir(parents=True, exist_ok=True)
+    for li in sorted(want):
+        tr = traces[li]
+        write_f32(bdir / f"l{li}_block_out.ds5t", tr.x_out)
+        write_i32(bdir / f"l{li}_router_ids.ds5t", tr.ids)
+        write_f32(bdir / f"l{li}_router_gate_w.ds5t", tr.gate_w)
+        write_f32(bdir / f"l{li}_router_probs_full.ds5t", tr.probs)
+    (bdir / "meta.json").write_text(json.dumps({
+        "prompt_name": name, "prompt_text": text, "prompt_token_ids": ptoks,
+        "append_n": append_n, "seq": seq, "n_layers_traced": len(want),
+        "layers": sorted(want),
+    }, indent=1))
+    print(f"[blocktrace] {name}: wrote {len(want)} layers to {bdir} "
+          f"in {time.time() - t0:.0f}s")
+
+
 def run_hf(model_dir: Path, out_dir: Path, layers: list[int], seed: int,
            n_new: int, e2e: bool):
     wp = HfProvider(model_dir)
@@ -896,10 +979,23 @@ def main():
     ap.add_argument("--n-new", type=int, default=8, help="greedy tokens per prompt")
     ap.add_argument("--e2e", action="store_true",
                     help="(--hf) also run streamed end-to-end logits; SLOW on 30B")
+    ap.add_argument("--block-trace", action="store_true",
+                    help="(--hf) lightweight per-layer residual-stream + router dump "
+                         "for an arbitrary prompt/depth (see --trace-prompt/--trace-append), "
+                         "instead of the full per-op fixture battery")
+    ap.add_argument("--trace-prompt", default="p0_capital",
+                    help="(--block-trace) REAL_PROMPT_TEXTS name to trace")
+    ap.add_argument("--trace-append", type=int, default=0,
+                    help="(--block-trace) extend the traced sequence with this many "
+                         "tokens of the prompt's own oracle greedy continuation, to "
+                         "reach a later decode step instead of just the prefill")
     args = ap.parse_args()
 
     if args.synthetic:
         run_synthetic(args.out, args.seed, args.n_new)
+    elif args.block_trace:
+        layers = [int(x) for x in args.layers.split(",")] if args.layers else None
+        run_hf_blocktrace(args.hf, args.out, args.trace_prompt, args.trace_append, layers)
     else:
         cfg_probe = json.loads((args.hf / "config.json").read_text())
         n_layers = cfg_probe["num_hidden_layers"]

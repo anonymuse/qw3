@@ -51,6 +51,7 @@ rejected or deferred beyond this backlog, not promoted into it.
 | P2-OPT-1 | Co-activation-aware expert grouping | At/after M3 correctness, before M4 placement freeze | Telemetry extended to pairwise co-activation counts |
 | P2-OPT-2 | Replicated-attention expert-parallel hybrid | Only if measured decode margin falls below target after overhead | M1 decode-sim comparison + M4 real numbers |
 | P2-OPT-3 | Router-driven cold-expert prefetch (simple) | Only if M4 cold-miss stalls exceed the p95 budget | Working tiered residency + promotion path (M4) |
+| P2-OPT-4 | Mixed-precision (f16/f32) deep-layer expert banks | Only on quality evidence: measured ΔPPL above noise, 235B drift flipping tokens past Amendment 2's 0.5-logit guard, or router displaced-mass > 2e-2 | Feasibility study in flight on max-1 (`docs/findings/m2-mixed-precision-feasibility.md`, DRAFT as of 2026-07-17) |
 
 ---
 
@@ -142,6 +143,46 @@ prefetch wastes bandwidth, never changes output).
 **Boundary — hard line.** No *learned* predictor (a model that infers next-layer
 experts from the hidden state). That is the academic/unproven version and stays out of
 this backlog entirely. Simple static + correlation only.
+
+### P2-OPT-4 — Mixed-precision (f16/f32) deep-layer expert banks
+
+**What.** Keep a small number of layers' expert weight banks at f16/f32 instead of Q8_0
+to reduce late-layer quantization drift (proposed, unevaluated, in
+`docs/findings/m2-router-divergence-localization.md` §6).
+
+**Why deferred, not V1.** T06's divergences are benign near-ties under ADR-005
+Amendment 2, so this buys nothing for gating — it reduces flip *hazard* but cannot
+produce determinism vs a non-weight-matched oracle. Its only real payoff would be output
+*quality*, so it must be justified by quality metrics, not oracle-match aesthetics. The
+localization data also undercuts the targeting: p3's flip involved zero router swaps
+(pure distributed drift + KV-history), p4's swaps sat at layers 9/12/34/46 (not only the
+deepest), and the attention path (which writes the KV cache at every layer) stays Q8_0
+regardless. Cost: ~+570MB per converted layer at 30B (~604M expert params/layer:
+642MB Q8_0 → 1.21GB f16); ~+2.3GB per layer at 235B, where memory is the binding
+constraint. It also changes the GGUF, re-baselining every fixture and gate.
+
+**Protocol when triggered.** (1) Measure 30B ΔPPL bf16-vs-Q8_0 on a held-out set;
+(2) ablate late-layer f16 and report Δflip-hazard and ΔPPL per GB added;
+(3) decide on those numbers. The in-flight max-1 feasibility study is input (1)/(2)
+groundwork — fold its findings in when it lands.
+
+**Boundary.** No new quant formats; only dtype selection per expert bank tensor.
+
+## Verification hardening (added 2026-07-17, from T06 / ADR-005 Amendment 2)
+
+### V-1 — GGUF-sourced dequant e2e oracle (weight-matched hard-100% gate)
+
+**What.** Run `make_fixtures.py`'s forward pass with weights dequantized from the GGUF's
+own Q8_0 blocks (its GGUF dequant reader already exists — wire it in as the weight
+provider) instead of the bf16 safetensors. Oracle and engine then consume identical
+weight values, so ADR-005 §4's full hard rows apply — including greedy 100% — with an
+e2e near-tie assert (`m ≥ 1e-3` per emitted position) mirroring §2's
+`assert_no_router_neartie`. The tool already streams the 57GiB checkpoint on a 48GB
+node, so memory is not expected to be the blocker.
+
+**Trigger.** When a milestone needs exact greedy determinism vs an oracle: T06-class
+gates at 235B, regression baselining, or any dispute where Amendment 2's statistical
+rule feels insufficient. Not required for T07.
 
 ## Review
 

@@ -77,12 +77,116 @@ const Rig = struct {
     }
 };
 
-fn makeRig(alloc: std.mem.Allocator, max_batch: u32) !*Rig {
+fn makeRigWithOptions(alloc: std.mem.Allocator, options: CpuEngine.Options) !*Rig {
     const rig = try alloc.create(Rig);
     errdefer alloc.destroy(rig);
     rig.* = try Rig.init(alloc);
-    rig.engine = try CpuEngine.init(alloc, rig.ctx, &rig.weights, max_batch);
+    rig.engine = try CpuEngine.initWithOptions(alloc, rig.ctx, &rig.weights, options);
     return rig;
+}
+
+fn makeRig(alloc: std.mem.Allocator, max_batch: u32) !*Rig {
+    return makeRigWithOptions(alloc, .{ .max_batch = max_batch });
+}
+
+test "engine runtime context capacity bounds cache and overflow" {
+    const alloc = std.testing.allocator;
+    const capacity: u32 = 2;
+    const rig = try makeRigWithOptions(alloc, .{
+        .max_batch = capacity,
+        .context_capacity = capacity,
+        .kv_dtype = .f32,
+    });
+    defer {
+        rig.deinit();
+        alloc.destroy(rig);
+    }
+
+    try std.testing.expectEqual(capacity, rig.engine.context_capacity);
+    try std.testing.expectEqual(contracts.Dtype.f32, rig.engine.kv_dtype);
+    const cache_bytes = @as(u64, rig.weights.config.n_kv_heads) * capacity * rig.weights.config.head_dim * @sizeOf(f32);
+    try std.testing.expectEqual(cache_bytes, rig.engine.k_cache[0].len);
+    try std.testing.expectEqual(cache_bytes, rig.engine.v_cache[0].len);
+
+    try rig.engine.forward(&.{ 1, 2 }, null);
+    try std.testing.expectEqual(capacity, rig.engine.pos);
+    try std.testing.expectError(forward.EngineError.ContextOverflow, rig.engine.forward(&.{3}, null));
+    try std.testing.expectEqual(capacity, rig.engine.pos);
+}
+
+test "engine rejects context capacity above model max" {
+    const alloc = std.testing.allocator;
+    var rig = try Rig.init(alloc);
+    defer {
+        rig.weights.deinit();
+        rig.ctx.deinit();
+        rig.model.deinit();
+    }
+
+    try std.testing.expectError(forward.EngineError.BadShape, CpuEngine.initWithOptions(alloc, rig.ctx, &rig.weights, .{
+        .max_batch = 1,
+        .context_capacity = rig.weights.config.max_ctx + 1,
+    }));
+}
+
+test "engine f16 KV path allocates half-size caches and stays close to f32" {
+    const alloc = std.testing.allocator;
+    const capacity: u32 = 3;
+    const rig_f32 = try makeRigWithOptions(alloc, .{
+        .max_batch = capacity,
+        .context_capacity = capacity,
+        .kv_dtype = .f32,
+    });
+    defer {
+        rig_f32.deinit();
+        alloc.destroy(rig_f32);
+    }
+    const rig_f16 = try makeRigWithOptions(alloc, .{
+        .max_batch = capacity,
+        .context_capacity = capacity,
+        .kv_dtype = .f16,
+    });
+    defer {
+        rig_f16.deinit();
+        alloc.destroy(rig_f16);
+    }
+
+    const f16_cache_bytes = @as(u64, rig_f16.weights.config.n_kv_heads) * capacity * rig_f16.weights.config.head_dim * @sizeOf(f16);
+    try std.testing.expectEqual(f16_cache_bytes, rig_f16.engine.k_cache[0].len);
+    try std.testing.expectEqual(f16_cache_bytes, rig_f16.engine.v_cache[0].len);
+    try std.testing.expectEqual(rig_f32.engine.k_cache[0].len / 2, rig_f16.engine.k_cache[0].len);
+
+    const vocab = rig_f32.weights.config.vocab_size;
+    const logits_f32 = try alloc.alloc(f32, capacity * vocab);
+    defer alloc.free(logits_f32);
+    const logits_f16 = try alloc.alloc(f32, capacity * vocab);
+    defer alloc.free(logits_f16);
+    try rig_f32.engine.forward(&.{ 1, 2, 3 }, logits_f32);
+    try rig_f16.engine.forward(&.{ 1, 2, 3 }, logits_f16);
+
+    const result = fixture.compare(logits_f32, logits_f16, 0.02, 0.02);
+    std.debug.print("f16 KV engine vs f32: max_abs_diff {e} max_rel_diff {e}\n", .{ result.max_abs_diff, result.max_rel_diff });
+    try std.testing.expect(result.pass);
+    try std.testing.expectEqual(forward.argmax(logits_f32[logits_f32.len - vocab ..]), forward.argmax(logits_f16[logits_f16.len - vocab ..]));
+
+    // Reset and repeat as prefill + one-token decode. This exercises f16 cache
+    // reads on the incremental path and proves reset safely reuses the bounded
+    // cache allocation without requiring it to be zeroed.
+    rig_f32.engine.reset();
+    rig_f16.engine.reset();
+    try rig_f32.engine.forward(&.{ 1, 2 }, logits_f32[0 .. 2 * vocab]);
+    try rig_f16.engine.forward(&.{ 1, 2 }, logits_f16[0 .. 2 * vocab]);
+    try rig_f32.engine.forward(&.{3}, logits_f32[2 * vocab .. 3 * vocab]);
+    try rig_f16.engine.forward(&.{3}, logits_f16[2 * vocab .. 3 * vocab]);
+    try std.testing.expectEqual(capacity, rig_f32.engine.pos);
+    try std.testing.expectEqual(capacity, rig_f16.engine.pos);
+
+    const decode_f32 = logits_f32[2 * vocab .. 3 * vocab];
+    const decode_f16 = logits_f16[2 * vocab .. 3 * vocab];
+    const decode_result = fixture.compare(decode_f32, decode_f16, 0.02, 0.02);
+    std.debug.print("f16 KV incremental decode vs f32: max_abs_diff {e} max_rel_diff {e}\n", .{ decode_result.max_abs_diff, decode_result.max_rel_diff });
+    try std.testing.expect(decode_result.pass);
+    try std.testing.expectEqual(forward.argmax(decode_f32), forward.argmax(decode_f16));
 }
 
 test "e2e: 5 fixture prompts — logits in tolerance, greedy argmax exact" {

@@ -160,10 +160,16 @@ pub fn Engine(comptime Ctx: type, comptime K: type) type {
         w: *const Weights,
         cfg: ModelConfig,
         max_batch: u32,
+        /// Allocated KV positions. This is also the frozen kernel `max_ctx`
+        /// stride and may be smaller than the model's advertised max_ctx.
+        context_capacity: u32,
+        /// Element dtype used by every per-layer K/V cache.
+        kv_dtype: Dtype,
         /// Tokens already in the KV caches (absolute position of next token).
         pos: u32 = 0,
 
-        // Per-layer KV caches, frozen layout f32 [n_kv_heads, max_ctx, head_dim].
+        // Per-layer KV caches, frozen layout kv_dtype
+        // [n_kv_heads, context_capacity, head_dim].
         k_cache: []Buf,
         v_cache: []Buf,
 
@@ -191,10 +197,33 @@ pub fn Engine(comptime Ctx: type, comptime K: type) type {
         trace_fn: ?TraceFn = null,
         trace_user: ?*anyopaque = null,
 
+        pub const Options = struct {
+            max_batch: u32,
+            /// Null preserves the historical behavior: allocate model max_ctx.
+            context_capacity: ?u32 = null,
+            /// f32 preserves historical numerical behavior; f16 halves KV bytes.
+            kv_dtype: Dtype = .f32,
+        };
+
+        /// Compatibility initializer: model-max f32 KV, exactly as before.
         pub fn init(alloc: std.mem.Allocator, ctx: *Ctx, w: *const Weights, max_batch: u32) EngineError!Self {
+            return initWithOptions(alloc, ctx, w, .{ .max_batch = max_batch });
+        }
+
+        /// Initialize with a runtime KV capacity and dtype without changing
+        /// the frozen kernel contracts. Kernel `max_ctx` remains the allocated
+        /// cache stride, while `w.config.max_ctx` remains the model ceiling.
+        pub fn initWithOptions(alloc: std.mem.Allocator, ctx: *Ctx, w: *const Weights, options: Options) EngineError!Self {
             const cfg = w.config;
-            if (max_batch == 0) return EngineError.BadShape;
-            const n: u64 = max_batch;
+            const context_capacity = options.context_capacity orelse cfg.max_ctx;
+            if (options.max_batch == 0 or context_capacity == 0 or context_capacity > cfg.max_ctx)
+                return EngineError.BadShape;
+            const cache_elem_bytes: u64 = switch (options.kv_dtype) {
+                .f32 => @sizeOf(f32),
+                .f16 => @sizeOf(f16),
+                else => return EngineError.UnsupportedDtype,
+            };
+            const n: u64 = options.max_batch;
             const hidden: u64 = cfg.hidden_dim;
             const q_dim: u64 = @as(u64, cfg.n_q_heads) * cfg.head_dim;
             const kv_dim: u64 = @as(u64, cfg.n_kv_heads) * cfg.head_dim;
@@ -204,7 +233,7 @@ pub fn Engine(comptime Ctx: type, comptime K: type) type {
             errdefer alloc.free(k_cache);
             const v_cache = alloc.alloc(Buf, cfg.n_layers) catch return EngineError.OutOfMemory;
             errdefer alloc.free(v_cache);
-            const cache_bytes = @as(u64, cfg.n_kv_heads) * cfg.max_ctx * cfg.head_dim * f;
+            const cache_bytes = @as(u64, cfg.n_kv_heads) * context_capacity * cfg.head_dim * cache_elem_bytes;
             for (k_cache) |*b| b.* = try ctx.createBuffer(cache_bytes);
             for (v_cache) |*b| b.* = try ctx.createBuffer(cache_bytes);
 
@@ -216,7 +245,9 @@ pub fn Engine(comptime Ctx: type, comptime K: type) type {
                 .ctx = ctx,
                 .w = w,
                 .cfg = cfg,
-                .max_batch = max_batch,
+                .max_batch = options.max_batch,
+                .context_capacity = context_capacity,
+                .kv_dtype = options.kv_dtype,
                 .k_cache = k_cache,
                 .v_cache = v_cache,
                 .x = try ctx.createBuffer(n * hidden * f),
@@ -231,10 +262,10 @@ pub fn Engine(comptime Ctx: type, comptime K: type) type {
                 .positions = try ctx.createBuffer(n * @sizeOf(i32)),
                 .embed_row = alloc.alloc(f32, cfg.hidden_dim) catch return EngineError.OutOfMemory,
                 .zeros = zeros,
-                .pos_host = alloc.alloc(i32, max_batch) catch return EngineError.OutOfMemory,
-                .router_ids = alloc.alloc(u16, max_batch * cfg.top_k) catch return EngineError.OutOfMemory,
-                .router_weights = alloc.alloc(f32, max_batch * cfg.top_k) catch return EngineError.OutOfMemory,
-                .pairs = alloc.alloc(contracts.PairDispatch, max_batch * cfg.top_k) catch return EngineError.OutOfMemory,
+                .pos_host = alloc.alloc(i32, options.max_batch) catch return EngineError.OutOfMemory,
+                .router_ids = alloc.alloc(u16, options.max_batch * cfg.top_k) catch return EngineError.OutOfMemory,
+                .router_weights = alloc.alloc(f32, options.max_batch * cfg.top_k) catch return EngineError.OutOfMemory,
+                .pairs = alloc.alloc(contracts.PairDispatch, options.max_batch * cfg.top_k) catch return EngineError.OutOfMemory,
             };
         }
 
@@ -269,7 +300,8 @@ pub fn Engine(comptime Ctx: type, comptime K: type) type {
             const cfg = self.cfg;
             const n: u32 = @intCast(tokens.len);
             if (n == 0 or n > self.max_batch) return EngineError.BatchTooLarge;
-            if (self.pos + n > cfg.max_ctx) return EngineError.ContextOverflow;
+            if (n > self.context_capacity or self.pos > self.context_capacity - n)
+                return EngineError.ContextOverflow;
             const hidden = cfg.hidden_dim;
             const q_dim = cfg.n_q_heads * cfg.head_dim;
             const kv_dim = cfg.n_kv_heads * cfg.head_dim;
@@ -355,12 +387,12 @@ pub fn Engine(comptime Ctx: type, comptime K: type) type {
                     .v_new = self.v,
                     .k_cache = self.k_cache[li],
                     .v_cache = self.v_cache[li],
-                    .kv_dtype = .f32,
+                    .kv_dtype = self.kv_dtype,
                     .pos = self.pos,
                     .n_tokens = n,
                     .n_kv_heads = cfg.n_kv_heads,
                     .head_dim = cfg.head_dim,
-                    .max_ctx = cfg.max_ctx,
+                    .max_ctx = self.context_capacity,
                 });
 
                 // a = gqaAttention(q, cache[i])
@@ -368,14 +400,14 @@ pub fn Engine(comptime Ctx: type, comptime K: type) type {
                     .q = self.q,
                     .k_cache = self.k_cache[li],
                     .v_cache = self.v_cache[li],
-                    .kv_dtype = .f32,
+                    .kv_dtype = self.kv_dtype,
                     .out = self.attn,
                     .pos = self.pos,
                     .n_tokens = n,
                     .n_q_heads = cfg.n_q_heads,
                     .n_kv_heads = cfg.n_kv_heads,
                     .head_dim = cfg.head_dim,
-                    .max_ctx = cfg.max_ctx,
+                    .max_ctx = self.context_capacity,
                     .scale = scale,
                 });
                 self.traceOp(layer, "attn", self.attn, n * q_dim);

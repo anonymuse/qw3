@@ -39,14 +39,23 @@ reflects "how many machines touch this project," not just the 3 compute nodes.
   via absolute paths under `/opt/homebrew/bin` and Homebrew's Cellar). Added
   the same `eval` line to `~/.zshenv` on all three nodes; idempotent (checked
   with `grep -q` first).
-- **Zig build test summary is on stderr.** `zig build test` writes its
-  "Build Summary: ... tests passed" line to stderr, not stdout — a script
-  redirecting stderr to `/dev/null` while grepping stdout for pass/fail will
-  always see a mismatch even on a clean pass. `verify-cluster.sh` captures
-  both streams merged (`2>&1`) before checking. Separately, Zig 0.16 also
-  prints a cosmetic red `failed command:` line when a passing test writes to
-  stderr (see `docs/orchestration/HANDOFF.md` landmine #1) — exit code and
-  the Build Summary line are the ground truth, not that line.
+- **Preserve Zig output, but classify by exit code.** Zig may write its build
+  summary to stderr, and Zig 0.16 can print a cosmetic red `failed command:`
+  line when a passing test writes to stderr (see
+  `docs/orchestration/HANDOFF.md` landmine #1). `verify-cluster.sh` therefore
+  leaves both output streams visible for diagnosis but uses the `zig build`
+  process exit code as the sole pass/fail signal. Human-readable summary text
+  is evidence for debugging, not a substitute for the command status.
+- **Exact-SHA/clean checks are per node.** `verify-cluster.sh` processes A, B,
+  and C sequentially. Before it runs tests on a node, that node must be at the
+  invoking checkout's exact commit with no tracked or untracked changes. This
+  is not a separate all-node preflight barrier: an earlier clean node can finish
+  its tests before a later node is inspected. The verifier reports overall
+  success only when all three nodes pass checkout/setup/tests.
+- **Verification is LAN-only.** The six reachability checks in
+  `verify-cluster.sh` resolve `.local` names to LAN IPv4 and run `ping`. They do
+  not validate Thunderbolt Bridge routing, topology, throughput, or latency,
+  and must not be cited as Thunderbolt evidence.
 
 ## Node D details / access model
 

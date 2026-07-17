@@ -111,6 +111,15 @@ pub const Ctx = struct {
     pipelines: std.ArrayList(PipelineEntry),
     /// Every MTLBuffer this Ctx created; released in deinit.
     buffers: std.ArrayList(id),
+    /// One reusable shared upload buffer for short-lived dispatch metadata.
+    /// It is separate from `buffers` so growing it replaces/releases the old
+    /// resource instead of retaining every historical capacity until deinit.
+    reusable_upload: Buf = .{},
+    /// Bounded host scratch for synchronized CPU-side provider work. The GPU
+    /// provider is single-engine/single-threaded, so one slice of each type is
+    /// sufficient and retains only the largest capacity requested.
+    host_f32_scratch: std.ArrayList(f32),
+    host_bool_scratch: std.ArrayList(bool),
     /// In-flight batch state (begin()..submit()).
     pool: ?*anyopaque = null,
     cmdbuf: id = null,
@@ -136,6 +145,8 @@ pub const Ctx = struct {
             .libraries = .empty,
             .pipelines = .empty,
             .buffers = .empty,
+            .host_f32_scratch = .empty,
+            .host_bool_scratch = .empty,
         };
         errdefer {
             release(queue);
@@ -148,6 +159,9 @@ pub const Ctx = struct {
 
     pub fn deinit(self: *Ctx) void {
         std.debug.assert(self.cmdbuf == null); // no batch in flight
+        release(self.reusable_upload.handle);
+        self.host_f32_scratch.deinit(self.alloc);
+        self.host_bool_scratch.deinit(self.alloc);
         for (self.buffers.items) |b| release(b);
         self.buffers.deinit(self.alloc);
         for (self.pipelines.items) |p| {
@@ -222,20 +236,45 @@ pub const Ctx = struct {
 
     // -- buffer management (frozen API) ------------------------------------
 
-    pub fn createBuffer(self: *Ctx, len: u64) KernelError!Buf {
+    fn newSharedBuffer(self: *Ctx, len: u64) KernelError!Buf {
         if (len == 0) return .{};
         const buf = msg(id, self.device, sel("newBufferWithLength:options:"), .{
             @as(usize, @intCast(len)), storage_mode_shared,
         });
         if (buf == null) return KernelError.OutOfMemory;
-        self.buffers.append(self.alloc, buf) catch {
-            release(buf);
-            return KernelError.OutOfMemory;
-        };
         // newBufferWithLength contents are undefined; zero for parity with
         // the CPU reference ctx (and ExpertMlp's pre-zeroed accumulators).
         @memset(contentsSlice(buf, 0, len), 0);
         return .{ .handle = buf, .offset = 0, .len = len };
+    }
+
+    pub fn createBuffer(self: *Ctx, len: u64) KernelError!Buf {
+        const result = try self.newSharedBuffer(len);
+        if (result.handle == null) return result;
+        const buf = result.handle;
+        self.buffers.append(self.alloc, buf) catch {
+            release(buf);
+            return KernelError.OutOfMemory;
+        };
+        return result;
+    }
+
+    /// Upload dispatch metadata into one context-owned shared buffer. Reuse is
+    /// safe only between command buffers: changing shared bytes while an
+    /// encoded dispatch can still read them would race/corrupt that dispatch.
+    /// The current one-CLI-engine flow naturally calls this immediately after
+    /// its router synchronization. Capacity grows to the largest request while
+    /// the retained Metal resource count remains exactly one.
+    pub fn reusableUpload(self: *Ctx, bytes: []const u8) KernelError!Buf {
+        if (bytes.len == 0) return .{};
+        if (self.cmdbuf != null) return KernelError.DeviceFailure;
+        if (bytes.len > self.reusable_upload.len) {
+            const replacement = try self.newSharedBuffer(bytes.len);
+            release(self.reusable_upload.handle);
+            self.reusable_upload = replacement;
+        }
+        @memcpy(contentsSlice(self.reusable_upload.handle, 0, bytes.len), bytes);
+        return .{ .handle = self.reusable_upload.handle, .offset = 0, .len = bytes.len };
     }
 
     /// Wrap caller-owned bytes. Page-aligned pointer + page-multiple length
@@ -271,6 +310,11 @@ pub const Ctx = struct {
         @memcpy(contentsSlice(buf.handle, buf.offset + offset, bytes.len), bytes);
     }
 
+    /// Complete a pending batch before direct unified-memory host access.
+    pub fn synchronizeForHost(self: *Ctx) KernelError!void {
+        if (self.cmdbuf != null) try self.submit();
+    }
+
     /// T05: auto-flush a pending batch before reading. Any caller that has
     /// been encoding dispatches without an explicit submit() (the layer-
     /// batching pattern kernel providers use) still gets a coherent read —
@@ -280,15 +324,30 @@ pub const Ctx = struct {
     /// cost) when no batch is open, so existing begin()/.../submit()/download()
     /// call sites are unaffected.
     pub fn download(self: *Ctx, buf: Buf, offset: u64, out: []u8) KernelError!void {
-        if (self.cmdbuf != null) try self.submit();
+        try self.synchronizeForHost();
         @memcpy(out, contentsSlice(buf.handle, buf.offset + offset, out.len));
     }
 
     /// CPU-visible bytes of a Buf region (unified memory). Valid only while
     /// no in-flight GPU work touches the buffer.
     pub fn hostBytes(self: *Ctx, buf: Buf, offset: u64, len: u64) []u8 {
-        _ = self;
+        std.debug.assert(self.cmdbuf == null);
         return contentsSlice(buf.handle, buf.offset + offset, len);
+    }
+
+    pub fn hostF32Scratch(self: *Ctx, len: usize) KernelError![]f32 {
+        self.host_f32_scratch.resize(self.alloc, len) catch return KernelError.OutOfMemory;
+        return self.host_f32_scratch.items;
+    }
+
+    pub fn hostBoolScratch(self: *Ctx, len: usize) KernelError![]bool {
+        self.host_bool_scratch.resize(self.alloc, len) catch return KernelError.OutOfMemory;
+        return self.host_bool_scratch.items;
+    }
+
+    /// Diagnostics only: includes the reusable upload resource when allocated.
+    pub fn diagnosticBufferCount(self: *const Ctx) usize {
+        return self.buffers.items.len + @intFromBool(self.reusable_upload.handle != null);
     }
 
     fn contentsSlice(handle: id, offset: u64, len: u64) []u8 {

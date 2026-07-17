@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf 'mock ping: %s\n' "$*"
+if [ "${MOCK_PING_FAIL:-0}" = "1" ]; then
+  printf 'RAW_PING_FAILURE_MARKER\n' >&2
+  exit 44
+fi

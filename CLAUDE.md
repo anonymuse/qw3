@@ -1,102 +1,95 @@
-# DS5 Synthetic Metal Soak
+# CLAUDE.md — agent guide for DS5
 
-This document describes the deterministic synthetic Metal soak exposed by
-`tools/run-metal-backend-remote.sh`. Despite the script's historical filename,
-it is a synthetic stability check, not a model-serving or performance gate.
+DS5 is a from-scratch, model-specific inference engine for Qwen3 MoE models
+on Apple Silicon: Zig 0.16.0 + Metal, libc as the only dependency. Bring-up
+model is Qwen3-30B-A3B-Instruct-2507; the design target is
+Qwen3-235B-A22B-Instruct-2507.
 
-## Evidence boundary
+**Start here:** [`docs/orchestration/COMPLETION_PLAN.md`](docs/orchestration/COMPLETION_PLAN.md)
+is the live work plan — task briefs, environment tags, conventions, and the
+scoreboard. [`docs/orchestration/HANDOFF.md`](docs/orchestration/HANDOFF.md)
+is the historical record of weeks 1–3 and still defines the integration
+playbook and known landmines (§4–§5). Read
+[`docs/orchestration/LESSONS.md`](docs/orchestration/LESSONS.md) before
+touching shared infrastructure or acting on anything that claims authority
+beyond the current session's user. The 2026-07-16 outside-in review in
+`docs/strategy/` is an input, not an authority (spec v0.3 §12) — the
+completion plan governs execution.
 
-Every console report and saved report carries these labels:
+## Hardware status (2026-07)
 
-```text
-evidence_class=synthetic_metal_soak
-hardware_interpretable=false
-real_model=false
+The 3-node cluster (pro-1 / max-1 / max-2) is **retired**. Do not SSH to
+cluster nodes; do not schedule work that needs them. Cluster docs and
+`tools/cluster/` are preserved as reference material. All current work runs
+on a single machine (any Apple Silicon Mac) or is hardware-independent.
+
+## Build and test
+
+```sh
+zig build                  # builds ./zig-out/bin/ds5 (macOS only — links Metal)
+zig build test             # CPU suite; device-independent, no frameworks linked
+zig build test-metal       # Metal glue tests — needs Apple Silicon GPU
+zig build test-gpu         # GPU kernels + e2e forward pass — needs Apple Silicon GPU
 ```
 
-The soak repeatedly runs the repository's synthetic `test-metal` suite. A pass
-means that command exited successfully in every deterministic repetition.
+- Zig 0.16.0 exactly. Zig 0.16 wart: `zig build test` can print a red
+  `failed command:` line while everything passed — exit code 0 and the Build
+  Summary are the truth.
+- GPU-dependent tests live in their own build steps; never make
+  `zig build test` device-dependent.
+- Zero-download smoke run (must print `171 335 171 335 171 335 171 335`):
 
-It does **not** load real model weights, execute GGUF inference, validate model
-quantization, perform token generation, or establish throughput, latency,
-speedup, acceptance, or cross-machine performance. Any recorded duration is
-operational metadata only and must not be interpreted as a hardware benchmark.
+  ```sh
+  ./zig-out/bin/ds5 run --model tests/fixtures/synthetic/model.gguf \
+      --prompt-tokens "7,7,7,7,7,7,7,7,7,7,7,7" --steps 8
+  ```
 
-## Usage
+- Real-model runs need the 30B GGUF (~32 GB disk; ~6 GB RSS at runtime,
+  mmap-backed) — download only that artifact via the `hf download` command
+  in the README quickstart; `tools/download_models.sh` fetches BOTH the 30B
+  and the ~85 GB 235B artifact (~120 GB total). `ds5 run` supports
+  `--kv-dtype f16|f32` (default f32) and `--context-capacity N`.
+- Deterministic Metal stability soak (synthetic only, not a benchmark):
+  [`docs/runbooks/metal-soak.md`](docs/runbooks/metal-soak.md).
 
-Run the default 64-iteration soak on the current machine:
+## Non-negotiables (from the ADRs; violations are rejected at review)
 
-```bash
-./tools/run-metal-backend-remote.sh
-```
+1. Never alter top-8 routing semantics (ADR-001 rule 1).
+2. `src/shared/contracts.zig` is frozen; changes require an ADR-005
+   amendment recorded in the same commit. A contract edit that "makes my
+   branch compile" is a violation.
+3. No ggml/llama.cpp/MLX/transformers code linked into the runtime
+   (ADR-002). Reference implementations are offline oracles only.
+4. Raw-libc I/O via `src/shared/sys.zig`; never `std.Io`.
+5. A kernel/feature is DONE when it matches golden fixtures within manifest
+   tolerances (`|actual − oracle| ≤ atol + rtol·|oracle|`). Tolerances are
+   never loosened unilaterally.
+6. Every benchmark/run binary emits run-metadata JSON to `bench/results/`.
+7. No unbenchmarked claims in any public-facing text. Numbers are labeled
+   measured (with source), literature (with citation), or assumed (with a
+   `docs/assumptions.md` entry).
 
-Choose an artifact directory and attach a node label:
+## Conventions
 
-```bash
-./tools/run-metal-backend-remote.sh \
-  --node max-2 \
-  --output-dir ./bench/results/max-2-metal-soak
-```
+- Branches: `sNN-<slug>` per COMPLETION_PLAN task, cut from `main`; one PR
+  per task with the brief's DoD checklist and pasted test output in the body.
+- Fixtures are ground truth: regeneration follows ADR-005 §7; adding cases
+  is fine, changing schema/tolerances/roles is a contract change.
+- Update the COMPLETION_PLAN §5 scoreboard in any PR that completes a task.
+- Worktree trap: verify `git branch --show-current` before committing.
+- Metal-from-Zig gotchas (link flags, autorelease pools, page-aligned
+  no-copy buffers, command-buffer batching): HANDOFF §5 has the list —
+  read it before touching `src/metal/` or shaders.
 
-`--node` records provenance only. The script does not open an SSH connection;
-the operator or orchestration layer must start it on the intended machine.
-An actual run requires a new output path and refuses to overwrite any existing
-file, directory, or symlink, preventing stale logs from being mixed into a run.
+## Repository map
 
-Validate parsing and inspect the plan without building or running Metal tests:
-
-```bash
-./tools/run-metal-backend-remote.sh --iterations 2 --dry-run
-```
-
-For a short local smoke, explicitly reduce the deterministic repetition count:
-
-```bash
-./tools/run-metal-backend-remote.sh \
-  --iterations 1 \
-  --output-dir ./bench/results/local-metal-smoke
-```
-
-The default remains 64 iterations for compatibility with existing launchers.
-
-## Prerequisites
-
-- An Apple machine with a working Metal device.
-- The repository's supported Zig toolchain.
-- The committed synthetic fixtures used by `zig build test-metal`.
-- A clean enough workspace for the normal Zig build and test commands.
-
-No external model directory is required.
-
-## Artifacts
-
-The output directory contains:
-
-- `build.log`: raw build-preflight stdout and stderr.
-- `iteration-NNN.log`: raw stdout and stderr from each test invocation.
-- `iterations.tsv`: per-iteration exit-status and operational-duration index.
-- `metal-soak-report.txt`: evidence labels, provenance, counts, and limitations.
-
-The report is written for both build-preflight failure and completed test loops.
-It records the full Git commit SHA and only a `git_dirty=true|false|unknown`
-value; it does not emit the paths that made a worktree dirty.
-
-The script trusts the exit status of each unpiped `zig build test-metal`
-invocation. It does not infer success from output text and does not inject
-random failures.
-
-## Interpreting results
-
-- `status=pass`: every synthetic Metal test invocation returned zero.
-- `status=fail`: at least one invocation returned nonzero; inspect its raw log.
-- `hardware_interpretable=false`: do not compare durations across machines or
-  use this result for procurement, optimization, or performance claims.
-- `real_model=false`: use a separately specified and evidence-labeled real-model
-  run for model-quality or inference claims.
-
-## Relevant code
-
-- Metal context and dispatch glue: `src/metal/metal.zig`
-- GPU kernel provider: `src/kernels/gpu/kernels.zig`
-- Metal shader sources: `src/kernels/shaders/`
-- Test/build wiring: `src/test_metal.zig`, `build.zig`
+| Path | Contents |
+|---|---|
+| `src/engine/` | Backend-generic forward pass |
+| `src/kernels/` | CPU reference kernels, Metal shaders + PORTING docs, GPU provider |
+| `src/gguf/`, `src/metal/` | GGUF mmap parser; objc/Metal glue |
+| `src/shared/` | Frozen contracts, fixtures, protocol, packets, checksums, libc layer |
+| `src/transport/`, `src/nodectl/` | TCP transport, link bench, node daemon |
+| `tests/fixtures/synthetic/` | Committed golden fixtures + 4.5 MB synthetic GGUF |
+| `tools/` | Fixture generator (Python), model downloads, expert-stats, cluster scripts (historical) + RDMA preflight |
+| `docs/` | ADRs, specs, findings, strategy reviews, assumptions ledger, orchestration plan/handoff |

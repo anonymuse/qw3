@@ -44,8 +44,10 @@ zig build test-gpu         # GPU kernels + e2e forward pass — needs Apple Sili
       --prompt-tokens "7,7,7,7,7,7,7,7,7,7,7,7" --steps 8
   ```
 
-- Real-model runs need the 30B GGUF (`tools/download_models.sh`, ~32 GB
-  disk; ~6 GB RSS at runtime, mmap-backed). `ds5 run` supports
+- Real-model runs need the 30B GGUF (~32 GB disk; ~6 GB RSS at runtime,
+  mmap-backed) — download only that artifact via the `hf download` command
+  in the README quickstart; `tools/download_models.sh` fetches BOTH the 30B
+  and the ~85 GB 235B artifact (~120 GB total). `ds5 run` supports
   `--kv-dtype f16|f32` (default f32) and `--context-capacity N`.
 - Deterministic Metal stability soak (synthetic only, not a benchmark):
   [`docs/runbooks/metal-soak.md`](docs/runbooks/metal-soak.md).

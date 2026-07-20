@@ -212,14 +212,21 @@ outputs:
 # → 171 335 171 335 171 335 171 335   (greedy tokens; matches the HF oracle exactly)
 ```
 
-**Run the real thing** — Qwen3-30B-A3B-Instruct-2507 Q8_0 (~32 GB download,
-[`tools/download_models.sh`](tools/download_models.sh)):
+**Run the real thing** — Qwen3-30B-A3B-Instruct-2507 Q8_0 (~32 GB, needs the
+Hugging Face CLI: `pip install -U huggingface_hub`):
 
 ```sh
+hf download unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF --include "*Q8_0*" \
+    --local-dir ~/ds5-models/qwen3-30b-a3b-instruct-2507-gguf
+
 ./zig-out/bin/ds5 run --model ~/ds5-models/qwen3-30b-a3b-instruct-2507-gguf/*.gguf \
     --prompt-tokens "151644,872,198,9707,151645,198,151644,77091,198" \
     --steps 32 --backend metal --kv-dtype f16
 ```
+
+(The cluster-era helper [`tools/download_models.sh`](tools/download_models.sh)
+fetches **both** this artifact and the ~85 GB 235B telemetry artifact —
+~120 GB total. Use the single-artifact command above unless you want both.)
 
 `--kv-dtype f16` halves KV-cache bytes (f32 remains the default and the
 historical numerical baseline); `--context-capacity N` pre-sizes the cache.

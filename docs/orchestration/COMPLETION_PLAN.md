@@ -86,7 +86,7 @@ matches — this is the difference between cheap progress and wasted runs.
 | `[PY]` | Python 3.11+ only (stdlib + pytest; `transformers`/`torch` only where the brief says so). OS-independent | Cheap cloud agent |
 | `[ZIG-CI]` | Needs Zig 0.16.0 but **no GPU and no Metal**: `zig build` + `zig build test` (the CPU root deliberately links no frameworks). Expected — but not yet proven — to work on Linux; task S1.1 settles this. Until S1.1 reports, treat as macOS-only | Cloud agent after S1.1 verifies; otherwise any Mac |
 | `[MAC]` | Any Apple Silicon Mac, macOS 15+, Zig 0.16.0. All current suites pass on a 24 GB M5 MacBook Air | Owner's machine or a Mac CI runner |
-| `[MAC+30B]` | `[MAC]` plus the Qwen3-30B-A3B-Instruct-2507 Q8_0 GGUF (~32 GB disk; `tools/download_models.sh`). Peak RSS is ~6 GB (measured, mmap-backed), so 24 GB RAM suffices for *correctness* runs; do not publish *performance* numbers from a machine that pages | Owner's machine |
+| `[MAC+30B]` | `[MAC]` plus the Qwen3-30B-A3B-Instruct-2507 Q8_0 GGUF (~32 GB disk; download only that artifact via the `hf download … --include "*Q8_0*"` command in the README quickstart — `tools/download_models.sh` also pulls the ~85 GB 235B artifact). Peak RSS is ~6 GB (measured, mmap-backed), so 24 GB RAM suffices for *correctness* runs; do not publish *performance* numbers from a machine that pages | Owner's machine |
 | `[OWNER]` | Requires the human: GitHub settings UI, recordings, purchases, publishing decisions | Jesse |
 
 ### Conventions

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[ "${1:-}" = "build" ] || { echo "mock zig: expected build" >&2; exit 64; }
+step="${2:-}"
+printf 'RAW_ZIG_OUTPUT step=%s\n' "$step"
+
+if [ -n "${MOCK_ZIG_FAIL_STEP:-}" ] && [ "$step" = "$MOCK_ZIG_FAIL_STEP" ]; then
+  # Deliberately print text that the old verifier accepted as a pass while
+  # returning failure. The verifier must retain this output and fail closed.
+  printf 'Build Summary: 999/999 tests passed\n' >&2
+  printf 'RAW_ZIG_FAILURE_MARKER step=%s\n' "$step" >&2
+  exit 23
+fi
+
+printf 'Build Summary: mock success\n' >&2

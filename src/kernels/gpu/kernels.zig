@@ -8,9 +8,9 @@
 //!
 //! Router (routerTopK): PORTING-moe.md §1 freezes this as CPU-only,
 //! permanently — no Metal kernel exists for it. This module's routerTopK
-//! reads the ffn-normed activations and router weight back to the host
-//! (`Ctx.download`, which auto-flushes any pending batch — see the T05 note
-//! on `download` in metal.zig) and runs the identical top-k algorithm the
+//! synchronizes the pending batch, reads the ffn-normed activations and router
+//! weight directly through their shared MTLBuffer storage, and runs the
+//! identical top-k algorithm the
 //! CPU reference (`kernels/cpu/kernels_c.zig`) uses. It is a deliberate
 //! reimplementation rather than a call into that CPU function: the CPU
 //! version is hard-typed to `*CpuCtx` and its buffer access
@@ -339,23 +339,17 @@ pub fn routerTopK(ctx: *Ctx, args: contracts.RouterArgs) KernelError!void {
     const row_bytes: usize = @intCast(args.w_dtype.rowBytes(dim));
     if (args.w.len < n_experts * row_bytes) return KernelError.ShapeMismatch;
 
-    const x_host = ctx.alloc.alloc(f32, n_tokens * dim) catch return KernelError.OutOfMemory;
-    defer ctx.alloc.free(x_host);
-    const w_host = ctx.alloc.alloc(u8, n_experts * row_bytes) catch return KernelError.OutOfMemory;
-    defer ctx.alloc.free(w_host);
-
-    // Router boundary: download() auto-flushes the pending batch (metal.zig
-    // T05 fix), so this is the point every op since the last flush actually
-    // executes on the GPU. Record that batch's elapsed time as "this layer's"
-    // GPU time (see the module doc comment on what the number covers).
-    try ctx.download(args.x, 0, std.mem.sliceAsBytes(x_host));
+    // Router boundary: finish every op since the last flush before reading the
+    // shared MTLBuffer contents. Record that batch's elapsed time as "this
+    // layer's" GPU time (see the module doc comment on what the number covers).
+    try ctx.synchronizeForHost();
     recordLayerNs(ctx.gpuElapsedNs());
-    try ctx.download(args.w, 0, w_host);
+    const x_bytes = ctx.hostBytes(args.x, 0, @as(u64, n_tokens) * dim * @sizeOf(f32));
+    const x_host: []const f32 = @alignCast(std.mem.bytesAsSlice(f32, x_bytes));
+    const w_host: []const u8 = ctx.hostBytes(args.w, 0, @as(u64, n_experts) * row_bytes);
 
-    const probs = ctx.alloc.alloc(f32, n_experts) catch return KernelError.OutOfMemory;
-    defer ctx.alloc.free(probs);
-    const taken = ctx.alloc.alloc(bool, n_experts) catch return KernelError.OutOfMemory;
-    defer ctx.alloc.free(taken);
+    const probs = try ctx.hostF32Scratch(n_experts);
+    const taken = try ctx.hostBoolScratch(n_experts);
 
     var t: usize = 0;
     while (t < n_tokens) : (t += 1) {
@@ -414,12 +408,11 @@ pub fn expertMlpSwiglu(ctx: *Ctx, args: contracts.ExpertMlpArgs) KernelError!voi
     if (args.dim % 32 != 0 or args.ffn_dim % 32 != 0) return KernelError.ShapeMismatch;
     if (args.pairs.len == 0) return; // nothing to accumulate
 
+    // The router boundary leaves no batch in flight, so the context's one
+    // reusable shared upload buffer can be overwritten safely. This removes
+    // the former retained MTLBuffer allocation on every layer/dispatch.
+    const pairs_buf = try ctx.reusableUpload(std.mem.sliceAsBytes(args.pairs));
     ensureBatch(ctx);
-    // Transient per-dispatch buffer for the pair list (12 B/pair, small — a
-    // handful of KB even at real-model top_k=8 batch sizes). v2 could reuse a
-    // persistent upload buffer sized to max_batch*top_k instead of allocating
-    // one MTLBuffer per layer; correctness-first for M2b bring-up.
-    const pairs_buf = try ctx.bufferFromBytes(std.mem.sliceAsBytes(args.pairs));
     const pso = try ctx.pipeline("expert_mlp_swiglu_q8");
     ctx.setPipeline(pso);
     const p = ExpertMlpParams{
@@ -830,7 +823,7 @@ test "GPU router fixtures: expert ids exact, gate weights in tolerance" {
     try std.testing.expectEqual(@as(usize, 3), n_cases);
 }
 
-test "GPU expert_mlp fixtures: q8_0 fused SwiGLU in tolerance" {
+test "GPU expert_mlp fixtures: correct and pair upload buffer stable after warm-up" {
     const alloc = std.testing.allocator;
     var parsed = try skippableManifest(alloc);
     defer parsed.deinit();
@@ -880,7 +873,7 @@ test "GPU expert_mlp fixtures: q8_0 fused SwiGLU in tolerance" {
         }
 
         const out = try ctx.createBuffer(@as(u64, n_tokens) * dim * @sizeOf(f32));
-        try expertMlpSwiglu(ctx, .{
+        const expert_args = contracts.ExpertMlpArgs{
             .x = try ctx.bufferFromBytes(input.data),
             .gate = try ctx.bufferFromBytes(gate.data),
             .up = try ctx.bufferFromBytes(up.data),
@@ -892,8 +885,20 @@ test "GPU expert_mlp fixtures: q8_0 fused SwiGLU in tolerance" {
             .dim = dim,
             .ffn_dim = ffn_dim,
             .n_experts = n_experts,
-        });
+        };
+        try expertMlpSwiglu(ctx, expert_args);
         try ctx.submit();
+
+        // The first call allocates/warms the single reusable pair upload.
+        // Repeated real expert dispatches must retain a stable Metal resource
+        // count instead of adding one buffer per layer as the old path did.
+        const buffers_after_warmup = ctx.diagnosticBufferCount();
+        for (0..4) |_| {
+            @memset(ctx.hostBytes(out, 0, out.len), 0);
+            try expertMlpSwiglu(ctx, expert_args);
+            try ctx.submit();
+            try std.testing.expectEqual(buffers_after_warmup, ctx.diagnosticBufferCount());
+        }
 
         const actual = try alloc.alloc(f32, @as(usize, n_tokens) * dim);
         defer alloc.free(actual);

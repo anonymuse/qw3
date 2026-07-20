@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+dest=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -4)
+      shift
+      ;;
+    -o)
+      [ "$#" -ge 2 ] || exit 64
+      shift 2
+      ;;
+    -*)
+      shift
+      ;;
+    *)
+      dest="$1"
+      shift
+      break
+      ;;
+  esac
+done
+
+[ -n "$dest" ] || { echo "mock ssh: missing destination" >&2; exit 64; }
+[ -n "${TEST_REMOTE_ROOT:-}" ] || { echo "mock ssh: TEST_REMOTE_ROOT is required" >&2; exit 64; }
+
+if [ -n "${MOCK_SSH_CALL_LOG:-}" ]; then
+  printf '%s\n' "$dest" >> "$MOCK_SSH_CALL_LOG"
+fi
+
+host="${dest#*@}"
+export HOME="$TEST_REMOTE_ROOT/$host"
+mkdir -p "$HOME"
+
+if [ "${1:-}" = "/bin/bash" ]; then
+  exec "$@"
+fi
+if [ "$#" -eq 1 ]; then
+  exec /bin/bash -c "$1"
+fi
+
+echo "mock ssh: unsupported command for $dest: $*" >&2
+exit 64

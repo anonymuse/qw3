@@ -4,11 +4,11 @@ Every load-bearing number or behavior we have **not yet measured**. Each entry g
 replaced by a measurement (link the finding) or explicitly re-dated. Rule: nothing in
 this file may appear in a public claim.
 
-| # | Assumption | Source | Status (2026-07-08) |
+| # | Assumption | Source | Status (updated through 2026-07-16) |
 |---|---|---|---|
 | A-01 | Node A (M5 Pro) UMA bandwidth ≈ 307 GB/s; B/C (M5 Max) ≈ 614 GB/s | Apple spec sheets via v0.2 pack | Unmeasured |
 | A-02 | TB5 IP-bridge link delivers multi-GB/s bandwidth and sub-millisecond RTT | Hope | Unmeasured — M0 `ds5 bench link` replaces this |
-| A-03 | macOS exposes no user-space RDMA over Thunderbolt; TCP over the TB bridge is the realistic transport | Platform knowledge | Assumed; "RDMA-style" language retired until proven otherwise |
+| A-03 | macOS 26.2+ exposes a Verbs-compatible, two-sided user-space RDMA API on Apple silicon Macs with Thunderbolt 5 | [Apple TN3205](https://developer.apple.com/documentation/technotes/tn3205-low-latency-communication-with-rdma-over-thunderbolt) and [macOS 26.2 release notes](https://developer.apple.com/documentation/macos-release-notes/macos-26_2-release-notes) | Platform availability verified 2026-07-16; QW3 transport correctness and performance remain unmeasured. Use `tools/cluster/check-rdma-readiness.sh` for sanitized local preflight only. |
 | A-04 | Qwen3-235B expert usage is skewed enough for hot/warm/cool/cold tiering to beat uniform placement | v0.2 tiering design | Unmeasured — thesis-critical; M1 telemetry capture replaces this |
 | A-05 | 235B expert weights ≈ 227B params (94 layers × 128 experts × 3 × 4096 × 1536); budget closes only at ~2.4–2.6 bpw average | Arithmetic from HF config | Config values to be verified against downloaded artifact |
 | A-06 | Per-node static cap 33.6GB (70% of 48GB) leaves enough runtime reserve for KV at 32K (~3.2GB/worker at FP16) | v0.2 pack | Planning value; verify under real Metal heap behavior |

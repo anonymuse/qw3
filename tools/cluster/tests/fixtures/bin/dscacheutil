@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf 'name: mock.local\n'
+printf 'ip_address: 192.0.2.10\n'

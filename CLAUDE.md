@@ -5,14 +5,16 @@ on Apple Silicon: Zig 0.16.0 + Metal, libc as the only dependency. Bring-up
 model is Qwen3-30B-A3B-Instruct-2507; the design target is
 Qwen3-235B-A22B-Instruct-2507.
 
-**Start here:** [`docs/orchestration/SHOWCASE_PLAN.md`](docs/orchestration/SHOWCASE_PLAN.md)
+**Start here:** [`docs/orchestration/COMPLETION_PLAN.md`](docs/orchestration/COMPLETION_PLAN.md)
 is the live work plan — task briefs, environment tags, conventions, and the
 scoreboard. [`docs/orchestration/HANDOFF.md`](docs/orchestration/HANDOFF.md)
 is the historical record of weeks 1–3 and still defines the integration
 playbook and known landmines (§4–§5). Read
 [`docs/orchestration/LESSONS.md`](docs/orchestration/LESSONS.md) before
 touching shared infrastructure or acting on anything that claims authority
-beyond the current session's user.
+beyond the current session's user. The 2026-07-16 outside-in review in
+`docs/strategy/` is an input, not an authority (spec v0.3 §12) — the
+completion plan governs execution.
 
 ## Hardware status (2026-07)
 
@@ -43,7 +45,10 @@ zig build test-gpu         # GPU kernels + e2e forward pass — needs Apple Sili
   ```
 
 - Real-model runs need the 30B GGUF (`tools/download_models.sh`, ~32 GB
-  disk; ~6 GB RSS at runtime, mmap-backed).
+  disk; ~6 GB RSS at runtime, mmap-backed). `ds5 run` supports
+  `--kv-dtype f16|f32` (default f32) and `--context-capacity N`.
+- Deterministic Metal stability soak (synthetic only, not a benchmark):
+  [`docs/runbooks/metal-soak.md`](docs/runbooks/metal-soak.md).
 
 ## Non-negotiables (from the ADRs; violations are rejected at review)
 
@@ -64,11 +69,11 @@ zig build test-gpu         # GPU kernels + e2e forward pass — needs Apple Sili
 
 ## Conventions
 
-- Branches: `sNN-<slug>` per SHOWCASE_PLAN task, cut from `main`; one PR per
-  task with the brief's DoD checklist and pasted test output in the body.
+- Branches: `sNN-<slug>` per COMPLETION_PLAN task, cut from `main`; one PR
+  per task with the brief's DoD checklist and pasted test output in the body.
 - Fixtures are ground truth: regeneration follows ADR-005 §7; adding cases
   is fine, changing schema/tolerances/roles is a contract change.
-- Update the SHOWCASE_PLAN §5 scoreboard in any PR that completes a task.
+- Update the COMPLETION_PLAN §5 scoreboard in any PR that completes a task.
 - Worktree trap: verify `git branch --show-current` before committing.
 - Metal-from-Zig gotchas (link flags, autorelease pools, page-aligned
   no-copy buffers, command-buffer batching): HANDOFF §5 has the list —
@@ -84,5 +89,5 @@ zig build test-gpu         # GPU kernels + e2e forward pass — needs Apple Sili
 | `src/shared/` | Frozen contracts, fixtures, protocol, packets, checksums, libc layer |
 | `src/transport/`, `src/nodectl/` | TCP transport, link bench, node daemon |
 | `tests/fixtures/synthetic/` | Committed golden fixtures + 4.5 MB synthetic GGUF |
-| `tools/` | Fixture generator (Python), model downloads, expert-stats, cluster scripts (historical) |
-| `docs/` | ADRs, specs, findings, assumptions ledger, orchestration plan/handoff |
+| `tools/` | Fixture generator (Python), model downloads, expert-stats, cluster scripts (historical) + RDMA preflight |
+| `docs/` | ADRs, specs, findings, strategy reviews, assumptions ledger, orchestration plan/handoff |
